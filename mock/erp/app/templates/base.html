@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {#- 防作弊 token：页面的 JS 从这里读出来，附加到所有 /api/* 请求的
+      X-ERP-UI 头上（《模拟ERP设计》§5.1）。它不写进 cookie 而是写在 DOM 里，
+      是因为只有「真的渲染了这个页面」的一方才能拿到它。 -#}
+  <meta name="erp-ui-token" content="{{ request.session.get('ui_token', '') }}">
+  <title>{% block title %}模拟 ERP{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">模拟 ERP</span>
+  {% if operator %}
+  <nav>
+    <a href="/dashboard" data-testid="nav-dashboard">工作台</a>
+    {#- 这一条**故意没有 data-testid**（《模拟ERP设计》§9.3）——
+        RPA 必须靠链接文本「订单管理」定位它。真实项目里你控制不了对方系统的
+        DOM，读这段代码的人应该一眼看到「这里就是那个脆弱的定位」。 -#}
+    <a href="/orders">订单管理</a>
+    <a href="/inventory" data-testid="nav-inventory">库存查询</a>
+    {% if enable_review_page %}
+    <a href="/review" data-testid="nav-review">审核</a>
+    {% endif %}
+  </nav>
+  <span class="whoami">{{ operator.username }} · <a href="/logout">退出</a></span>
+  {% endif %}
+</header>
+
+<main>
+{% block content %}{% endblock %}
+</main>
+
+{#- 确认对话框（§9.2）。放在 base 里是因为保存和提交审核都要用；
+    标记了 data-confirm 的表单由 app.js 拦下并打开它。 -#}
+<dialog id="confirm-dialog" data-testid="dialog-confirm">
+  <p id="confirm-message"></p>
+  <div class="dialog-actions">
+    <button type="button" id="confirm-no" data-testid="btn-confirm-no">取消</button>
+    <button type="button" id="confirm-yes" data-testid="btn-confirm-yes">确定</button>
+  </div>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

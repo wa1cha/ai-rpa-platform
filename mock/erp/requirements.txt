@@ -1,0 +1,35 @@
+# 模拟 ERP 的依赖 —— 刻意比主服务精简。
+#
+# 这里比 backend/requirements.txt 少的东西都是有意删掉的：没有 redis（ERP 不排队）、
+# 没有 PyJWT（它用服务端 session，不是无状态 token）、没有 openpyxl（它不导 Excel）。
+# ERP 扮演的是「别人家的老系统」，它的依赖清单不该跟我们的主服务长得一样。
+#
+# 实际安装：本机这些包都已就绪，无需额外安装。
+# 单独部署时：pip install -r mock/erp/requirements.txt
+
+# ---- Web 框架 ----
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+
+# ---- 页面模板（服务端渲染，见《模拟ERP设计》§2.1）----
+jinja2>=3.1,<4.0
+#: 表单表单提交要它（FastAPI 的 Form(...) 依赖 python-multipart）
+python-multipart>=0.0.20
+#: SessionMiddleware 签名 cookie 要它
+itsdangerous>=2.2,<3.0
+
+# ---- 数据库（异步，独立库 mock_erp）----
+sqlalchemy[asyncio]>=2.0,<3.0
+asyncmy>=0.2.10
+
+# ---- 配置与校验 ----
+pydantic>=2.10,<3.0
+pydantic-settings>=2.7,<3.0
+
+# ---- 口令哈希 ----
+bcrypt>=4.2,<5.0
+
+# ---- 测试 ----
+pytest>=8.3,<9.0
+pytest-asyncio>=0.25,<1.0
+httpx>=0.28,<1.0

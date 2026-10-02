@@ -1,0 +1,45 @@
+# ============ 环境变量（含密钥，绝不提交）============
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ============ Node / 前端 ============
+node_modules/
+dist/
+.vite/
+*.local
+
+# ============ 运行时产物 ============
+logs/
+*.log
+# RPA 失败截图 + 其它进程运行期产物（backend/var/，运行时生成，不入库）
+# 注意：截图故意落在 webroot 之外，所以不在这里、也不该出现在前端静态目录。
+backend/var/
+
+# 模拟平台生成的订单 CSV（generate_orders.py 的产物，随时可再造，不入库）
+mock/platform/out/
+
+# ============ IDE / 系统 ============
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ============ 本地数据库文件 ============
+*.sqlite3
+*.db

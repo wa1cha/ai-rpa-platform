@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}订单管理 · 模拟 ERP{% endblock %}
+
+{% block content %}
+<h1>订单管理</h1>
+
+<form class="toolbar" method="get" action="/orders">
+  <input type="text" name="keyword" value="{{ keyword }}" placeholder="按 ERP 单号 / 来源单号搜索"
+         data-testid="input-search">
+  <select name="status" data-testid="select-status">
+    <option value="">全部状态</option>
+    <option value="DRAFT" {% if status == 'DRAFT' %}selected{% endif %}>草稿</option>
+    <option value="PENDING_REVIEW" {% if status == 'PENDING_REVIEW' %}selected{% endif %}>待审核</option>
+    <option value="APPROVED" {% if status == 'APPROVED' %}selected{% endif %}>已通过</option>
+  </select>
+  <button type="submit" data-testid="btn-search">搜索</button>
+  <a class="button" href="/orders/new" data-testid="btn-create-order">新建订单</a>
+</form>
+
+<table data-testid="table-orders">
+  <thead>
+    <tr>
+      <th>ERP 单号</th>
+      <th>来源单号</th>
+      <th>客户</th>
+      <th>商品</th>
+      <th>数量</th>
+      <th>金额</th>
+      <th>状态</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for order in orders %}
+    <tr data-testid="row-order-{{ order.erp_order_no }}">
+      <td>{{ order.erp_order_no }}</td>
+      <td>{{ order.source_order_no }}</td>
+      <td>{{ order.customer_name }}</td>
+      <td>{{ order.product_name }}</td>
+      <td>{{ order.quantity }}</td>
+      <td class="num">{{ '%.2f' | format(order.amount) }}</td>
+      {#- 这一格**故意没有 data-testid**（§9.3）—— 状态是第 7 列，
+          RPA 得按列序号取单元格。真实系统不会为「第 7 列」起个名字。 -#}
+      <td>{{ status_label(order.status) }}</td>
+      <td><a href="/orders/{{ order.erp_order_no }}" data-testid="link-detail-{{ order.erp_order_no }}">详情</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="empty">没有匹配的订单</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="pager">
+  <span class="summary">共 {{ total }} 条，第 {{ page }} 页</span>
+  {% if has_prev %}
+  <a class="button" href="/orders?keyword={{ keyword }}&status={{ status }}&page={{ page - 1 }}"
+     data-testid="btn-page-prev">上一页</a>
+  {% endif %}
+  {% if has_next %}
+  <a class="button" href="/orders?keyword={{ keyword }}&status={{ status }}&page={{ page + 1 }}"
+     data-testid="btn-page-next">下一页</a>
+  {% endif %}
+</div>
+{% endblock %}

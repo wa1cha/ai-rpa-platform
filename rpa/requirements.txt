@@ -1,0 +1,37 @@
+# RPA Worker 的依赖 —— 刻意比 backend/requirements.txt 瘦一大截。
+#
+# Worker 与主平台之间**只有 HTTP 这一条通道**（《需求规格》§关键约束），
+# 它不连 MySQL、不连 Redis，也不对外提供 Web 服务。所以下面这些
+# backend 必需的东西，这里一个都不需要：
+#
+#   fastapi / uvicorn       —— Worker 是客户端，不是服务端
+#   sqlalchemy / asyncmy    —— 不碰数据库
+#   redis                   —— 不碰队列，任务从 /rpa/tasks/claim 拿
+#   PyJWT / bcrypt          —— 只把 token 原样放进 Authorization 头，不自己签/验
+#   python-multipart        —— 上传截图时 httpx 自己拼 multipart
+#   openpyxl                —— Excel 导入是主平台的事
+#   pytest-asyncio          —— 见下
+#
+# 这份清单本身就是那条约束的**可执行证据**：想让 Worker 去连数据库，
+# 得先往这里加依赖 —— 一眼就能看出越界了。
+
+# ---- 浏览器自动化 ----
+# 同步 API。Worker 一次只干一件事，线性代码比 async 好读好断点；
+# 而且 Playwright 的同步 API 不能在 asyncio 事件循环里跑 —— 心跳因此走线程。
+playwright>=1.49,<2.0
+
+# ---- 与主平台通信 ----
+httpx>=0.28,<1.0
+
+# ---- 配置与响应校验 ----
+# claim / heartbeat / result 的响应都用 pydantic 模型接住。
+# pydantic-settings 顺带带来 python-dotenv，所以这里不单列 dotenv。
+pydantic>=2.10,<3.0
+pydantic-settings>=2.7,<3.0
+
+# ---- 测试 ----
+# 只用 pytest 本体，**不装 pytest-asyncio**：`rpa/tests/` 里全是同步测试。
+# 根目录那个 `tests/conftest.py` 有个 autouse 的异步夹具，会因为异步插件的
+# 存在而给每个测试建事件循环 —— 而 Playwright 的同步 API 在里面会直接报错。
+# 所以 `rpa/tests/` 有自己独立的 conftest，一个 autouse 异步夹具都没有。
+pytest>=8.3,<9.0

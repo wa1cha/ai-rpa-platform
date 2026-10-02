@@ -1,0 +1,44 @@
+# 构建上下文是仓库根目录（docker-compose.yml 里 context: .），
+# 这里排掉的东西不会被送进构建进程，也就进不了镜像。
+
+# ---------- 密钥：必须挡在镜像之外 ----------
+# .env 里有 JWT_SECRET、MySQL 口令。运行时由 compose 的 `env_file: .env`
+# 注入环境变量，不需要、也绝不该把它烤进镜像层 ——
+# 镜像层是分层可读的，删掉文件也不会让它从历史层里消失。
+.env
+.env.*
+
+# ---------- 版本控制 ----------
+.git
+.gitignore
+
+# ---------- Python 缓存 ----------
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+
+# ---------- 测试 ----------
+# 测试要连 MySQL / Redis 和测试库，不该在运行镜像里跑；
+# 打进来只是白白增大镜像、还多暴露一份测试数据。
+tests/
+pytest.ini
+.pytest_cache/
+
+# ---------- 与后端镜像无关的目录 ----------
+frontend/
+rpa/
+ai/
+mock/
+docs/
+database/
+config/
+logs/
+scripts/
+
+# ---------- 杂项 ----------
+*.md
+项目介绍.txt
+docker-compose.yml
+.dockerignore
+Dockerfile

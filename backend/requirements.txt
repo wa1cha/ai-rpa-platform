@@ -1,0 +1,30 @@
+# ---- Web 框架 ----
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+
+# ---- 数据库（异步）----
+sqlalchemy[asyncio]>=2.0,<3.0
+asyncmy>=0.2.10
+
+# ---- 缓存 / 任务队列 ----
+redis>=5.2,<6.0
+
+# ---- 配置与校验 ----
+pydantic>=2.10,<3.0
+pydantic-settings>=2.7,<3.0
+python-dotenv>=1.0,<2.0
+
+# ---- 认证 ----
+PyJWT>=2.10,<3.0
+bcrypt>=4.2,<5.0
+
+# ---- 文件上传 / Excel 导入 ----
+python-multipart>=0.0.20
+openpyxl>=3.1,<4.0
+
+# ---- HTTP 客户端（调用 AI 接口、集成测试）----
+httpx>=0.28,<1.0
+
+# ---- 测试 ----
+pytest>=8.3,<9.0
+pytest-asyncio>=0.25,<1.0

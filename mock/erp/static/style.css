@@ -1,0 +1,141 @@
+/* 模拟 ERP 的样式 —— 刻意朴素，像 2010 年代的企业内网系统。
+   不引 UI 框架有两个理由（《模拟ERP设计》§2）：老系统就长这样；
+   也避免复杂的 DOM 结构干扰 RPA 定位。 */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: #222;
+  background: #f0f2f5;
+}
+
+/* ---------- 顶栏 ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 20px;
+  background: #2c3e50;
+  color: #fff;
+}
+.topbar .brand { font-size: 16px; font-weight: bold; }
+.topbar nav { display: flex; gap: 16px; }
+.topbar nav a, .topbar .whoami a { color: #cfd8e3; text-decoration: none; }
+.topbar nav a:hover, .topbar .whoami a:hover { color: #fff; text-decoration: underline; }
+.topbar .whoami { margin-left: auto; color: #9fb0c3; }
+
+main { padding: 20px; max-width: 1100px; }
+
+h1 { font-size: 20px; margin: 0 0 16px; }
+
+/* ---------- 表格 ---------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #c8cdd4;
+}
+th, td {
+  border: 1px solid #d8dde3;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #e8ecf1; font-weight: bold; }
+td.num, th.num { text-align: right; }
+tr:nth-child(even) td { background: #fafbfc; }
+td.empty { text-align: center; color: #888; padding: 24px; }
+
+/* ---------- 表单 ---------- */
+label { display: block; margin: 12px 0 4px; font-weight: bold; }
+input[type="text"], input[type="password"], input[type="number"], textarea, select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #b7bec7;
+  background: #fff;
+  font: inherit;
+}
+textarea { resize: vertical; }
+.req { color: #c0392b; font-weight: normal; }
+
+button, a.button {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid #1b4f72;
+  background: #2c6da3;
+  color: #fff;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+button:hover, a.button:hover { background: #1b4f72; }
+.actions, .toolbar { margin-top: 16px; display: flex; align-items: center; gap: 10px; }
+.toolbar { margin: 0 0 12px; }
+.toolbar input[type="text"] { width: 320px; }
+.toolbar select { width: auto; }
+td form { margin: 0; }
+td button { padding: 3px 10px; }
+
+/* ---------- 提示 ---------- */
+.error {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid #e0a0a0;
+  background: #fdecea;
+  color: #a3271b;
+}
+.success {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid #a3ccae;
+  background: #eaf7ed;
+  color: #1e7a37;
+}
+.hint { color: #666; margin: 6px 0; }
+
+/* ---------- 卡片 / 详情 ---------- */
+.card { background: #fff; border: 1px solid #c8cdd4; padding: 20px; }
+.card.narrow { max-width: 360px; margin: 40px auto; }
+dl.detail {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px 12px;
+  background: #fff;
+  border: 1px solid #c8cdd4;
+  padding: 16px;
+}
+dl.detail dt { color: #555; font-weight: bold; }
+dl.detail dd { margin: 0; }
+
+/* ---------- 工作台数字 ---------- */
+.stats { display: flex; gap: 16px; margin-bottom: 16px; }
+.stat {
+  background: #fff;
+  border: 1px solid #c8cdd4;
+  padding: 16px 24px;
+  text-align: center;
+  min-width: 120px;
+}
+.stat .num { display: block; font-size: 28px; font-weight: bold; color: #2c6da3; }
+.stat .label { color: #666; }
+
+/* ---------- 分页 ---------- */
+.pager { margin-top: 12px; display: flex; align-items: center; gap: 10px; }
+.pager .summary { color: #666; }
+
+/* ---------- 确认对话框 ---------- */
+dialog {
+  border: 1px solid #9aa4b0;
+  padding: 20px;
+  min-width: 280px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}

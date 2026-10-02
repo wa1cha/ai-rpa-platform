@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}审核 · 模拟 ERP{% endblock %}
+
+{% block content %}
+<h1>待审核订单</h1>
+
+<p class="hint">
+  这一步<b>不由 RPA 完成</b>。RPA 的职责到「提交审核」为止，审核是 ERP 侧人工的事 ——
+  保留它只是为了让订单状态机能走完（PENDING_REVIEW → APPROVED）。
+</p>
+
+<table data-testid="table-review">
+  <thead>
+    <tr>
+      <th>ERP 单号</th>
+      <th>来源单号</th>
+      <th>客户</th>
+      <th>商品</th>
+      <th>数量</th>
+      <th>金额</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for order in orders %}
+    <tr data-testid="row-review-{{ order.erp_order_no }}">
+      <td>{{ order.erp_order_no }}</td>
+      <td>{{ order.source_order_no }}</td>
+      <td>{{ order.customer_name }}</td>
+      <td>{{ order.product_name }}</td>
+      <td>{{ order.quantity }}</td>
+      <td class="num">{{ '%.2f' | format(order.amount) }}</td>
+      <td>
+        <form method="post" action="/review/{{ order.erp_order_no }}/approve">
+          <button type="submit" data-testid="btn-approve-{{ order.erp_order_no }}">审核通过</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="empty">没有待审核的订单</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}工作台 · 模拟 ERP{% endblock %}
+
+{% block content %}
+<h1>工作台</h1>
+
+<div class="stats">
+  <div class="stat">
+    <span class="num" data-testid="stat-pending-review">{{ pending }}</span>
+    <span class="label">待审核</span>
+  </div>
+  <div class="stat">
+    <span class="num" data-testid="stat-draft">{{ draft }}</span>
+    <span class="label">草稿</span>
+  </div>
+  <div class="stat">
+    <span class="num">{{ total }}</span>
+    <span class="label">订单总数</span>
+  </div>
+</div>
+
+<p class="hint">从上方导航进入「订单管理」开始录入订单。</p>
+{% endblock %}

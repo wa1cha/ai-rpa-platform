@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}新建订单 · 模拟 ERP{% endblock %}
+
+{% block content %}
+<h1>新建订单</h1>
+
+{#- 校验失败时**保留已填内容**（{{ form.get(...) }}）：老系统不会替你记住输入，
+    让 RPA 重填一遍是它真实的样子，也是「RPA 必须能重放」的练习。 -#}
+{% if error %}
+<p class="error" data-testid="msg-form-error">{{ error }}</p>
+{% endif %}
+
+{#- data-confirm 让 app.js 在提交前弹确认框（§9.2）。 -#}
+<form method="post" action="/orders" data-confirm="确定要保存这笔订单吗？">
+  <label for="source_order_no">来源订单号 <span class="req">*</span></label>
+  <input id="source_order_no" type="text" name="source_order_no"
+         value="{{ form.get('source_order_no', '') }}" data-testid="input-source-order-no"
+         placeholder="主系统的订单号，如 MOCK20260928001">
+
+  <label for="customer_name">客户姓名 <span class="req">*</span></label>
+  <input id="customer_name" type="text" name="customer_name"
+         value="{{ form.get('customer_name', '') }}" data-testid="input-customer-name">
+
+  <label for="phone">联系电话 <span class="req">*</span></label>
+  <input id="phone" type="text" name="phone"
+         value="{{ form.get('phone', '') }}" data-testid="input-phone"
+         placeholder="11 位手机号">
+
+  <label for="address">收货地址 <span class="req">*</span></label>
+  <textarea id="address" name="address" rows="3"
+            data-testid="input-address">{{ form.get('address', '') }}</textarea>
+
+  <label for="product_name">商品名称 <span class="req">*</span></label>
+  <input id="product_name" type="text" name="product_name"
+         value="{{ form.get('product_name', '') }}" data-testid="input-product-name">
+
+  <label for="sku">商品编码 (SKU) <span class="req">*</span></label>
+  <input id="sku" type="text" name="sku"
+         value="{{ form.get('sku', '') }}" data-testid="input-sku">
+  {#- 库存实时校验的落点：app.js 在 SKU / 数量变化后调 /api/inventory/check。
+      这个接口要求 X-ERP-UI 头 —— 也就是只有「真的在这个页面上」才调得通（§5.1）。 -#}
+  <p class="hint" id="stock-hint" data-testid="msg-stock-hint"></p>
+
+  <label for="quantity">数量 <span class="req">*</span></label>
+  <input id="quantity" type="number" name="quantity" min="1"
+         value="{{ form.get('quantity', '1') }}" data-testid="input-quantity">
+
+  <label for="amount">金额 <span class="req">*</span></label>
+  <input id="amount" type="number" name="amount" step="0.01" min="0"
+         value="{{ form.get('amount', '') }}" data-testid="input-amount">
+
+  <div class="actions">
+    <button type="submit" data-testid="btn-save-order">保存</button>
+    <a class="button" href="/orders">返回列表</a>
+  </div>
+</form>
+{% endblock %}

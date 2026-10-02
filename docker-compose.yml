@@ -1,0 +1,89 @@
+# ============================================================
+# Docker Compose —— Phase 7 部署用
+#
+# 说明：Phase 1~6 本地开发用 brew 起的 MySQL/Redis（见 scripts/start.sh），
+#       不用这个文件。等到 Phase 7 需要"环境一致性 + 一键部署"时再启用。
+#
+# 用法：
+#   docker compose up -d          # 起全部
+#   docker compose up -d mysql redis && docker compose logs -f   # 只起基础设施
+#   docker compose down           # 停
+# ============================================================
+
+services:
+  mysql:
+    # 本地开发用的是 brew 装的 MySQL 9.6，这里用 8.4 LTS（长期支持版）。
+    # 本项目用到的特性（utf8mb4 / InnoDB / JSON 列）在两者上行为一致。
+    image: mysql:8.4
+    container_name: ai-rpa-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DB:-ai_rpa}
+      MYSQL_USER: ${MYSQL_USER:-ai_rpa}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 容器首次启动时按文件名顺序执行，自动建表灌种子
+      - ./database/schema:/docker-entrypoint-initdb.d/01-schema:ro
+      - ./database/seed:/docker-entrypoint-initdb.d/02-seed:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-rpa-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ai-rpa-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 容器内要用服务名而不是 127.0.0.1
+      MYSQL_HOST: mysql
+      REDIS_HOST: redis
+      # 应用配置里 app_host 默认是 127.0.0.1，在容器里等于「只监听自己」——
+      # 宿主机和健康检查都连不上。必须在这里覆盖成 0.0.0.0。
+      APP_HOST: 0.0.0.0
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  mysql_data:
+  redis_data:

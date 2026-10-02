@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ order.erp_order_no }} · 模拟 ERP{% endblock %}
+
+{% block content %}
+<h1>订单详情</h1>
+
+{#- RPA 的判定逻辑（§4.6）：提交后要同时看到 msg-success **和** text-erp-order-no
+    有值才算成功。前者说明「这次提交生效了」，后者说明「我们确实站在正确的订单上」。 -#}
+{% if submitted %}
+<p class="success" data-testid="msg-success">已提交审核</p>
+{% endif %}
+
+<dl class="detail">
+  <dt>ERP 单号</dt>
+  <dd data-testid="text-erp-order-no">{{ order.erp_order_no }}</dd>
+
+  <dt>来源单号</dt>
+  <dd>{{ order.source_order_no }}</dd>
+
+  <dt>状态</dt>
+  <dd data-testid="text-order-status">{{ status_label(order.status) }}</dd>
+
+  <dt>客户姓名</dt>
+  <dd>{{ order.customer_name }}</dd>
+
+  <dt>联系电话</dt>
+  <dd>{{ order.phone }}</dd>
+
+  <dt>收货地址</dt>
+  <dd>{{ order.address }}</dd>
+
+  <dt>商品名称</dt>
+  <dd>{{ order.product_name }}</dd>
+
+  <dt>商品编码</dt>
+  <dd>{{ order.sku }}</dd>
+
+  <dt>数量</dt>
+  <dd>{{ order.quantity }}</dd>
+
+  <dt>金额</dt>
+  <dd>{{ '%.2f' | format(order.amount) }}</dd>
+</dl>
+
+{% if order.status == 'DRAFT' %}
+{#- 只在 DRAFT 时渲染按钮。已经是待审核时按钮**不出现** ——
+    RPA 找不到按钮就该理解成「这单已经提交过了」，而不是报错（§4.6）。 -#}
+<form method="post" action="/orders/{{ order.erp_order_no }}/submit-review"
+      data-confirm="确定要提交审核吗？提交后不可修改。">
+  <div class="actions">
+    <button type="submit" data-testid="btn-submit-review">提交审核</button>
+    <a class="button" href="/orders">返回列表</a>
+  </div>
+</form>
+{% else %}
+<div class="actions">
+  <a class="button" href="/orders">返回列表</a>
+</div>
+{% endif %}
+{% endblock %}
