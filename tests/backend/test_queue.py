@@ -15,8 +15,16 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.core.config import settings
 from app.core.enums import Priority
-from app.services.queue_service import _MEMBER_WIDTH, _PRIORITY_SHIFT, _member, _score
+from app.database.redis import redis_client
+from app.services.queue_service import (
+    _MEMBER_WIDTH,
+    _PRIORITY_SHIFT,
+    QueueService,
+    _member,
+    _score,
+)
 
 # ============================================================
 # unit —— 纯函数
@@ -178,3 +186,58 @@ async def test_rebuild_tolerates_null_queued_at(queue):
     """历史数据里 queued_at 可能为 NULL；重建不该因此炸掉整条队列。"""
     assert await queue.rebuild([(1, Priority.MEDIUM.value, None)]) == 1
     assert await queue.peek(10) == [1]
+
+
+# ============================================================
+# enqueue_fifo —— AI 分析队列用的纯 FIFO 入队
+# ============================================================
+
+
+@pytest.mark.integration
+async def test_enqueue_fifo_orders_by_enqueue_time(queue):
+    """没有优先级，只按入队时刻排。
+
+    分析前根本不知道订单的紧急度 —— 那正是分析的产出 —— 所以分析队列
+    只能 FIFO，这也是它必须是独立 key 的原因（语义与任务队列不同）。
+    """
+    t = datetime(2026, 1, 1, 12, 0, 0)
+    await queue.enqueue_fifo(3, t)
+    await queue.enqueue_fifo(1, t + timedelta(seconds=1))
+    await queue.enqueue_fifo(2, t + timedelta(seconds=2))
+
+    assert [await queue.pop_one() for _ in range(3)] == [3, 1, 2]
+
+
+@pytest.mark.integration
+async def test_enqueue_fifo_is_idempotent(queue):
+    """补偿任务会反复重入队同一批 order_id，靠 ZADD 覆盖才不会堆出重复项。
+
+    这是补偿机制能成立的前提：换成 LIST 的 RPUSH，这里会变成 size == 3，
+    同一单被分析三次。
+    """
+    t = datetime(2026, 1, 1, 12, 0, 0)
+    for _ in range(3):
+        await queue.enqueue_fifo(7, t)
+
+    assert await queue.size() == 1
+    assert await queue.peek(10) == [7]
+
+
+@pytest.mark.integration
+async def test_enqueue_fifo_same_millisecond_pops_in_id_order(queue):
+    """同毫秒入队时退化成按成员名字典序 —— 定长补零让它等于 id 升序（= 导入顺序）。"""
+    same = datetime(2026, 1, 1, 12, 0, 0)
+    for order_id in (10, 9, 100):
+        await queue.enqueue_fifo(order_id, same)
+
+    assert [await queue.pop_one() for _ in range(3)] == [9, 10, 100]
+
+
+@pytest.mark.integration
+async def test_queue_service_custom_key_isolates_from_the_task_queue(queue):
+    """传了 key 就只写那个 key —— AI 分析队列与任务队列必须是两个独立 ZSET。"""
+    ai_queue = QueueService(redis_client, key=settings.ai_queue_key)
+    await ai_queue.enqueue_fifo(5, datetime(2026, 1, 1))
+
+    assert await ai_queue.size() == 1
+    assert await queue.size() == 0  # 默认（任务）队列没被碰过

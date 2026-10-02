@@ -1,0 +1,36 @@
+# ai/ —— 订单 AI 分析包（Phase 5）
+#
+# 为什么要独立成包：backend 需要 `import ai`，但 backend 的进程是从 backend/
+# 目录启动的（`cd backend && PYTHONPATH=.`，见 scripts/start.sh），看不到仓库根
+# 下的 ai/。与其在 sys.path 上动手脚，不如把 ai/ 做成正规的可安装包：
+#
+#     <解释器> -m pip install -e ai/
+#
+# 装完（editable）之后，任何 cwd 下、任何属于这个解释器的进程都能 import ai。
+#
+# 依赖是单向的：backend → ai。这个包**不许** import backend.app.* ——
+# 配置靠构造参数传入，输入输出用本包自己的 dataclass。这样 tests/ai
+# （含评测集）才能不连库、秒级跑。
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-rpa-analysis"
+version = "0.1.0"
+description = "AI 订单分析（Phase 5）：读买家留言做语义判断，输出结构化判定"
+requires-python = ">=3.12"
+dependencies = [
+    # 刻意只有两个，比 backend 那份瘦得多：本包只发 HTTP、只做数据校验，
+    # 不碰数据库、不碰队列、不碰 Web 框架。
+    "httpx>=0.28,<1.0",
+    "pydantic>=2.10,<3.0",
+]
+
+[tool.setuptools]
+# pyproject.toml 就放在 ai/ 里，而包名也叫 ai —— 用 package-dir 把「项目根」
+# 映射成包 `ai`。子包按「映射后的父目录 + 子包名」解析（ai.llm → ./llm），
+# 所以这里必须逐个列全，不能用 packages.find（find 会在 ./ai/ 里找，找不到）。
+package-dir = { "ai" = "." }
+packages = ["ai", "ai.llm", "ai.extractor", "ai.classifier", "ai.prompts"]

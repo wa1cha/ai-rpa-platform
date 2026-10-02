@@ -44,10 +44,11 @@ class Job:
 def build_jobs() -> list[Job]:
     """本进程要托管的全部作业。
 
-    延迟导入 `zombie_reaper`：它 import 了 `RpaService` → 一堆 ORM 模型，
-    放在函数里能让这个模块的 import 保持极轻 —— 排查「作业进程起不来」时，
-    先能看到 `build_jobs` 之前的那几行日志，而不是卡在 ORM 初始化上。
+    延迟导入这两个作业模块：它们都 import 了 ORM 模型，放在函数里能让这个模块
+    的 import 保持极轻 —— 排查「作业进程起不来」时，先能看到 `build_jobs`
+    之前的那几行日志，而不是卡在 ORM 初始化上。
     """
+    from app.services.ai_reconciler import reconcile_once
     from app.workers.zombie_reaper import reap_once
 
     return [
@@ -55,6 +56,13 @@ def build_jobs() -> list[Job]:
             name="zombie_reaper",
             interval_seconds=settings.zombie_scan_interval_seconds,
             run=reap_once,
+        ),
+        # AI 分析队列的补偿（L1 入队失败 / L2 分析超时）。与僵尸回收共用同一个
+        # 扫描周期：两者都是「扫库看有没有卡住的单」，没有理由分成两个频率。
+        Job(
+            name="ai_reconciler",
+            interval_seconds=settings.zombie_scan_interval_seconds,
+            run=reconcile_once,
         ),
     ]
 

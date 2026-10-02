@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, and_, func, select
+from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import OrderStatus
 from app.models.ai_analysis import AiAnalysis
 from app.models.ai_review_log import AiReviewLog
 from app.models.order import Order
@@ -102,6 +103,65 @@ class OrderRepository(BaseRepository[Order]):
         `insert().values([...])` 多值语法，v1 的几千行用不着那一层优化。
         """
         self.session.add_all([Order(**row) for row in rows])
+
+    # ---------- AI 分析流水线：状态扫描与 CAS ----------
+
+    async def list_by_status_older_than(
+        self, status: OrderStatus, cutoff: datetime
+    ) -> list[Order]:
+        """「停在 `status`、且最后一次状态变更早于 `cutoff`」的订单。
+
+        这是 AI 补偿扫描的取数口，两条腿共用，只是参数不同：
+          · L1  `IMPORTED`  + 入队宽限截止 → 「写库成功、入队失败」的漏网单
+          · L2  `ANALYZING` + 分析超时截止 → 「分析进程中途死了」的卡死单
+
+        形状与 `TaskRepository.list_stale_running` 一致：**时间边界由调用方算**
+        （`ai_reconciler` 里的 `*_cutoff()`），仓储只管「扫哪些行」。这样测这个
+        函数不必 sleep，传一个固定 cutoff 就行。
+
+        判据用 `updated_at` 而不是 `created_at`：它由 DDL 的
+        `ON UPDATE CURRENT_TIMESTAMP` 维护（database/schema/003_orders.sql），
+        **状态一变就刷新**，因此等价于「最后一次状态变更时刻」。改用 created_at
+        的话，一张导入很久、刚被置回 IMPORTED 的单会被立刻判成陈旧而反复重推。
+
+        走 `idx_orders_status`（status 是前导列），每分钟扫一次、命中通常为 0。
+        """
+        stmt = select(Order).where(Order.status == status, Order.updated_at < cutoff)
+        return list(await self.session.scalars(stmt))
+
+    async def cas_transition_status(
+        self, order_id: int, from_status: OrderStatus, to_status: OrderStatus
+    ) -> bool:
+        """**条件**状态推进：仅当订单当前处于 `from_status` 才改成 `to_status`，
+        返回到底改没改到（`rowcount > 0`）。
+
+        为什么需要它 —— 消费端幂等。AI 分析队列是**至少一次投递**：ZADD 覆盖
+        保证队列里不堆重复项，但挡不住「同一单被投两次」的时序，例如：
+
+            worker A 出队取到 order 7
+            → A 分析到一半挂了，L2 把 7 置回 IMPORTED 并重新入队
+            → worker B 也取到 7，于是两个 worker 同时分析同一单
+
+        条件 UPDATE 让后到的那个 `rowcount == 0`，调用方直接丢弃并记一条日志。
+
+        它是 `TaskService.pop_next_runnable`「出队后回查一次数据库」的**无竞态
+        版本**：回查是「先读、再写」，两步之间（TOCTOU）状态可能又变了；而条件
+        UPDATE 把判断和写入压进同一条语句，由 MySQL 的行锁保证原子。
+
+        不提交 —— 事务边界归 service（与 `_set_order_status`、
+        `RpaService.reap_stale` 同一条原则：先写库、后动队列，两者本来就不在
+        同一个事务里）。
+
+        默认的 `synchronize_session="auto"` 在这里会走 `evaluate`：条件是
+        id 与 status 的等值比较，SQLAlchemy 能算出被改的是哪些已加载对象，
+        顺手把会话里那行同步成 `to_status`，免得同一事务后续读到旧值。
+        """
+        result = await self.session.execute(
+            update(Order)
+            .where(Order.id == order_id, Order.status == from_status)
+            .values(status=to_status)
+        )
+        return result.rowcount > 0
 
     # ---------- 列表 ----------
 

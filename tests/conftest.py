@@ -216,8 +216,19 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
 @pytest.fixture
 def queue() -> QueueService:
-    """真实的队列服务（连 db 15）。"""
+    """真实的队列服务（连 db 15）。默认 key = 任务队列。"""
     return QueueService(redis_client)
+
+
+@pytest.fixture
+def queue_ai() -> QueueService:
+    """AI 分析队列 —— **与任务队列是两个独立的 key**。
+
+    单独一个夹具而不是让用例各传 `key=`，是为了让「分析队列和任务队列不是
+    同一个东西」这件事在测试里也显式可见：想看串队列的 bug，就在同一个用例里
+    同时注入 `queue` 和 `queue_ai`。
+    """
+    return QueueService(redis_client, key=settings.ai_queue_key)
 
 
 @pytest.fixture

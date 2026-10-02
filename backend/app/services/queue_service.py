@@ -47,21 +47,23 @@ _PRIORITY_SHIFT = 10**13
 _MEMBER_WIDTH = 20
 
 
-def _member(task_id: int) -> str:
-    """任务 id 在 ZSET 里的成员名 —— **必须定长补零**。
+def _member(member_id: int) -> str:
+    """id 在 ZSET 里的成员名 —— **必须定长补零**。
+
+    任务队列的成员是 task_id，AI 分析队列的是 order_id，规则一样。
 
     ZSET 里 score 相同的成员按**成员名的字典序**排。直接用裸 id 做成员名时，
-    `"10" < "9"`（字符串比较逐位来，'1' < '9'），于是同一毫秒内入队的任务
+    `"10" < "9"`（字符串比较逐位来，'1' < '9'），于是同一毫秒内入队的成员
     会出现「id 大的先出队」，把 FIFO 悄悄反过来。
 
     补成定长后字典序与数值序一致，score 相同时的兜底顺序就等于
-    「任务 id 小的先出」—— 而 id 是自增的，也就是**创建顺序**，
+    「id 小的先出」—— 而 id 是自增的，也就是**创建顺序**，
     正是我们想要的。
 
-    这个 bug 很隐蔽：只有同一毫秒入队的一批任务里同时存在位数不同的 id
+    这个 bug 很隐蔽：只有同一毫秒入队的一批成员里同时存在位数不同的 id
     时才暴露，单测和手工点几下都碰不到。
     """
-    return f"{task_id:0{_MEMBER_WIDTH}d}"
+    return f"{member_id:0{_MEMBER_WIDTH}d}"
 
 
 def _score(priority: Priority, queued_at: datetime) -> int:
@@ -70,9 +72,12 @@ def _score(priority: Priority, queued_at: datetime) -> int:
 
 
 class QueueService:
-    def __init__(self, redis: RedisClient) -> None:
+    def __init__(self, redis: RedisClient, key: str | None = None) -> None:
         self.redis = redis
-        self.key = settings.task_queue_key
+        #: 默认是任务队列。AI 分析队列把 `settings.ai_queue_key` 传进来复用同一套
+        #: ZSET 机制 —— 两个队列的差别只有 score（优先级 vs 纯 FIFO）和 member
+        #: （task_id vs order_id），Redis 侧的操作完全一样，没必要写第二份。
+        self.key = key or settings.task_queue_key
 
     async def enqueue(
         self,
@@ -91,6 +96,45 @@ class QueueService:
             # 真走到这里说明有脏数据，用当前时刻让它排到队尾，不静默丢弃。
             queued_at = datetime.now()
         await self.redis.zadd(self.key, {_member(task_id): _score(priority, queued_at)})
+
+    async def enqueue_fifo(self, member_id: int, at: datetime | None = None) -> None:
+        """按 FIFO 推入队列 —— **没有优先级**，只按入队时刻排。
+
+        AI 分析队列用它。分析前不知道订单的紧急度（那正是分析的产出），所以
+        排序只能靠入队时间。score 就是毫秒时间戳：同毫秒的成员退化成按成员名
+        字典序，`_member` 的定长补零保证那等于「id 小的先出」，而 order_id
+        是自增的，也就是导入顺序。
+
+        **幂等是这个方法最重要的性质**：ZADD 对已存在的成员是覆盖而非追加。
+        补偿任务会反复重入队同一批 order_id，靠这一点才不会堆出重复项
+        （换成 LIST 的 RPUSH 就会），同一单也就不会被分析多次。
+        """
+        await self.enqueue_fifo_many([member_id], at)
+
+    async def enqueue_fifo_many(
+        self, member_ids: Iterable[int], at: datetime | None = None
+    ) -> int:
+        """一次 ZADD 推入一批 FIFO 成员，返回推入个数。
+
+        导入路径一次可能几百上千单，逐条 `enqueue_fifo` 就是几百上千次网络往返；
+        而它们本来就该算「同一时刻入队」—— 一次 `ZADD` 全部塞进去。
+
+        **整批共用一个 score**，这也是想要的：score 只精确到毫秒，同一次导入的
+        相对顺序由成员名兜底，而定长补零让那等于 id 升序，也就是文件里的行序。
+        反过来，要是逐条调用（不传 `at`）让循环里各取一次 `datetime.now()`，
+        它们的先后就成了「碰运气」的微秒序，同一份文件两次导入都不保证一致。
+
+        幂等性与 `enqueue_fifo` 相同（ZADD 覆盖），空列表直接返回 0 ——
+        不能发一次空 `ZADD`，参数个数不对 Redis 会报错。
+        """
+        ids = list(member_ids)
+        if not ids:
+            return 0
+        if at is None:
+            at = datetime.now()
+        score = int(at.timestamp() * 1000)
+        await self.redis.zadd(self.key, {_member(i): score for i in ids})
+        return len(ids)
 
     async def pop_one(self, block_seconds: float = 0) -> int | None:
         """取出 score 最小的任务，队列空则返回 None。

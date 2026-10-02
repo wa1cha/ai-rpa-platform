@@ -72,6 +72,22 @@ class Settings(BaseSettings):
     #: Redis 里任务队列的键名。放配置里是为了让 scripts/ 下的排查命令
     #: （`redis-cli zrange <key> 0 -1`）和应用用的是同一个名字，不用去翻代码。
     task_queue_key: str = "ai_rpa:task_queue"
+
+    #: Redis 里 AI 分析队列的键名。**刻意和任务队列分开**：两者语义不同 ——
+    #: 任务队列按优先级出队（HIGH 能插队），分析队列只能 FIFO，因为分析前
+    #: 根本不知道紧急度，那正是分析的产物。member 是 order_id。
+    ai_queue_key: str = "ai_rpa:ai_queue"
+
+    #: 「导入已提交、但还没进分析队列」的容许时长。超过这么久仍是 IMPORTED，
+    #: 就判定为「入队那一步失败了」，由补偿任务把它重新推回队列
+    #: （见 services/ai_reconciler.py）。给 60 秒是为了不误伤正常路径：
+    #: 提交和入队是同一次请求里的前后两步。
+    ai_enqueue_grace_seconds: int = 60
+
+    #: 订单停在 ANALYZING 超过这个时长，判定为「分析进程中途死了」，置回
+    #: IMPORTED 重排队。与 zombie_timeout_seconds 同一套思路（那边管 RUNNING 的任务）。
+    ai_analyzing_timeout_seconds: int = 300
+
     zombie_timeout_seconds: int = 300
     zombie_scan_interval_seconds: int = 60
     ai_worker_concurrency: int = 5

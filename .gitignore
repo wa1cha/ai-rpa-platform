@@ -9,6 +9,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
+# setuptools 的构建产物（pip wheel / 打 sdist 时生成，如 ai/build/）
+build/
 .venv/
 venv/
 env/

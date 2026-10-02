@@ -7,12 +7,17 @@
   · `integration` 真连数据库走接口：导入的四道关卡、筛选、脱敏的落点。
 """
 
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
+from redis.exceptions import RedisError
+
 from app.core.enums import ImportBatchStatus, OrderStatus
+from app.repositories.order_repository import OrderRepository
 from app.schemas.order import amount_to_str, mask_phone
+from app.services.import_service import ImportService
 
 PREFIX = "/api/v1"
 
@@ -197,6 +202,88 @@ async def test_import_rejects_an_unsupported_file_type(api_client, auth_headers)
 
 
 # ============================================================
+# integration —— 导入成功后的自动入队（AI 分析队列）
+# ============================================================
+
+
+@pytest.mark.integration
+async def test_import_enqueues_the_batch_for_ai_analysis(
+    api_client, auth_headers, queue_ai
+):
+    """「导入成功」包含两件事：订单落库 **且** 这批 order_id 进了 AI 分析队列。
+
+    漏了后一半，订单会静默地永远不被分析（要靠 L1 补偿才捞得回来，但那本是
+    不该发生的路径）。这里对着批次详情返回的 order_ids 逐一核对，顺带证明
+    队列里放的确实是这批单、而不是别的什么 id。
+    """
+    response = await _import(api_client, auth_headers, _csv(_row("Q-1"), _row("Q-2")))
+    batch_id = response.json()["data"]["batch_id"]
+
+    detail = await api_client.get(
+        f"{PREFIX}/import-batches/{batch_id}", headers=auth_headers
+    )
+    order_ids = detail.json()["data"]["order_ids"]
+
+    assert await queue_ai.size() == 2
+    assert sorted(await queue_ai.peek(10)) == sorted(order_ids)
+
+
+@pytest.mark.integration
+async def test_import_does_not_touch_the_task_queue(api_client, auth_headers, queue):
+    """入的是**分析队列**，不是任务队列 —— 两个 key 不能串。
+
+    串了的后果很隐蔽：任务队列只认 task_id，混进 order_id 后要么被
+    `pop_next_runnable` 回查时丢掉、要么真拿去当 task 用，两种都很难查。
+    """
+    await _import(api_client, auth_headers, _csv(_row("R-1")))
+
+    assert await queue.size() == 0
+
+
+@pytest.mark.integration
+async def test_dry_run_and_failed_import_enqueue_nothing(
+    api_client, auth_headers, queue_ai
+):
+    """没落库的批次就不该进队列：dry_run 一行没写，失败批次整批回滚。
+
+    这条是「先 commit 再入队」这个顺序的反面证明 —— 入队钩子挂在**成功提交
+    之后**，而不是解析通过时。
+    """
+    await _import(api_client, auth_headers, _csv(_row("S-1")), dry_run=True)
+    await _import(api_client, auth_headers, _csv(_row("S-2", phone="12345")))
+
+    assert await queue_ai.size() == 0
+
+
+@pytest.mark.integration
+async def test_import_still_succeeds_when_the_enqueue_fails(db_session, admin_user):
+    """入队是 best-effort：Redis 挂了，导入也必须照常成功返回。
+
+    这是整个补偿设计的**前提** —— 正因为这里可以失败且刻意不报错，才必须有
+    `ai_reconciler` 的 L1 腿来兜。用桩队列显式抛 `RedisError` 复现，而不是真
+    去停 Redis：这样能确定性地只打中「Redis 异常」这一条路径，也不依赖运行中
+    的服务状态。
+    """
+
+    class _BrokenQueue:
+        async def enqueue_fifo_many(self, member_ids, at=None):
+            raise RedisError("模拟 Redis 不可用")
+
+    result = await ImportService(db_session, queue=_BrokenQueue()).import_file(
+        filename="orders.csv",
+        content=_csv(_row("T-1"), _row("T-2")),
+        uploaded_by=admin_user.id,
+    )
+
+    assert result.status == ImportBatchStatus.COMPLETED
+    assert result.success_rows == 2
+    # 订单确实落库了 —— 入队失败不该牵连已经完成的写入
+    assert await OrderRepository(db_session).find_existing_order_nos(
+        ["T-1", "T-2"]
+    ) == {"T-1", "T-2"}
+
+
+# ============================================================
 # integration —— 查询
 # ============================================================
 
@@ -302,3 +389,65 @@ async def test_batch_detail_returns_404_for_a_missing_batch(api_client, auth_hea
 
     assert response.status_code == 404
     assert response.json()["code"] == 4004
+
+
+# ============================================================
+# integration —— AI 流水线：状态扫描与 CAS
+# ============================================================
+
+
+@pytest.mark.integration
+async def test_list_by_status_older_than_requires_both_status_and_age(
+    db_session, make_order
+):
+    """两个条件必须**同时**满足：状态对、**且**够陈旧。
+
+    故意把两种「不该命中」都摆出来 —— 状态不对的、时间不够老的。少判任何一个，
+    补偿就会去推一张正在被正常处理、或根本不该它管的单。
+    """
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    old = now - timedelta(minutes=10)
+    cutoff = now - timedelta(seconds=60)
+
+    stale = await make_order(status=OrderStatus.IMPORTED.value, updated_at=old)
+    await make_order(status=OrderStatus.IMPORTED.value, updated_at=now)  # 太新
+    await make_order(status=OrderStatus.ANALYZING.value, updated_at=old)  # 状态不对
+
+    found = await OrderRepository(db_session).list_by_status_older_than(
+        OrderStatus.IMPORTED, cutoff
+    )
+
+    assert [o.id for o in found] == [stale.id]
+
+
+@pytest.mark.integration
+async def test_cas_transition_succeeds_once_then_reports_false(db_session, make_order):
+    """条件更新只在状态仍匹配时生效 —— 这正是「至少一次投递」的消费端幂等。
+
+    第二次调用必须返回 False（而不是抛错、也不是再改一遍）：调用方据它丢弃
+    重复投递，不把一次正常的重复记成一条错误。
+    """
+    order = await make_order(status=OrderStatus.IMPORTED.value)
+    repo = OrderRepository(db_session)
+    cas = repo.cas_transition_status
+
+    assert await cas(order.id, OrderStatus.IMPORTED, OrderStatus.ANALYZING) is True
+    # 状态已不是 IMPORTED，同一条 CAS 必须落空
+    assert await cas(order.id, OrderStatus.IMPORTED, OrderStatus.ANALYZING) is False
+
+    await db_session.refresh(order)
+    assert order.status == OrderStatus.ANALYZING.value
+
+
+@pytest.mark.integration
+async def test_cas_transition_on_a_missing_order_is_false(db_session):
+    """补偿扫描拿到的 id 可能在扫描与处理之间被删掉 —— 这里必须是 False 而非抛错，
+    一次竞态不该打断整轮补偿。"""
+    repo = OrderRepository(db_session)
+
+    assert (
+        await repo.cas_transition_status(
+            999999, OrderStatus.IMPORTED, OrderStatus.ANALYZING
+        )
+        is False
+    )

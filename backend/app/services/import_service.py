@@ -10,10 +10,16 @@
 
 ②③ 刻意放在事务**之外**：它们是纯内存判断，不该占用数据库事务和行锁。
 只有确定整批干净，才值得去开一个事务。
+
+④ 之后还有一步**入队**（不进上面的编号，因为它不是「关卡」）：订单 commit
+成功后把这批 order_id 推进 AI 分析队列（`AI_QUEUE_KEY`）。这一步是
+**best-effort** —— 失败只记日志、不让导入失败，缺口由 `ai_reconciler` 的
+周期性补偿兜。原因见 `_enqueue_for_analysis`。
 """
 
 import csv
 import io
+import logging
 import re
 from dataclasses import dataclass, fields
 from datetime import datetime
@@ -21,17 +27,23 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from openpyxl import load_workbook
+from redis.exceptions import RedisError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.enums import ImportBatchStatus, OrderStatus
 from app.core.exceptions import ExcelParseError, NotFoundError
+from app.database.redis import redis_client
 from app.models.import_batch import ImportBatch
 from app.repositories.import_batch_repository import ImportBatchRepository
 from app.repositories.order_repository import OrderRepository
 from app.schemas.common import Page, PageParams
 from app.schemas.import_batch import ImportBatchDetail, ImportBatchListItem
 from app.schemas.order import ImportErrorItem, OrderImportResult
+from app.services.queue_service import QueueService
+
+logger = logging.getLogger(__name__)
 
 #: 上传大小上限，与《API接口设计》§6.3 的 10 MB 对齐。
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -370,10 +382,16 @@ def _validate_row(row_no: int, data: dict[str, Any]) -> tuple[ParsedOrder | None
 
 
 class ImportService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self, session: AsyncSession, queue: QueueService | None = None
+    ) -> None:
         self.session = session
         self.orders = OrderRepository(session)
         self.batches = ImportBatchRepository(session)
+        #: AI 分析队列。默认自己按 `settings.ai_queue_key` 造一个 —— 这样三个
+        #: 调用方（导入接口 + 两个批次查询接口）都不用改签名，而批次查询那条
+        #: 路径根本不会用到它。要换成别的队列（测试）就显式传进来。
+        self.queue = queue or QueueService(redis_client, key=settings.ai_queue_key)
 
     async def import_file(
         self,
@@ -629,6 +647,9 @@ class ImportService:
         )
         await self.session.commit()
 
+        # 订单已落库 —— 到这里「导入成功」对用户就已经成立，剩下的入队是内部事。
+        await self._enqueue_for_analysis(await self.batches.list_order_ids(batch_id))
+
         return OrderImportResult(
             batch_id=batch_id,
             filename=filename,
@@ -638,6 +659,36 @@ class ImportService:
             status=ImportBatchStatus.COMPLETED,
             errors=[],
         )
+
+    async def _enqueue_for_analysis(self, order_ids: list[int]) -> None:
+        """把刚导入的订单推进 AI 分析队列 —— **best-effort，失败只记日志**。
+
+        这是「写库成功、入队失败」这个缺口的**正常路径**一侧；兜底一侧在
+        `services/ai_reconciler.py` 的 L1 腿（扫 IMPORTED 超过宽限的单重推）。
+        两者必须成对存在：正因为这里可能失败且刻意不报错，才必须有周期性补偿。
+
+        三个刻意的选择：
+
+        · **顺序不可换 —— 先 commit 订单、再入队**。入队等于宣布「这单可以分析了」，
+          而分析要回库读它；先入队会让 worker 领到一行还不存在的订单。
+          因此这个缺口是**结构上必然存在**的，只能兜、不能消。
+        · **失败不报错**。订单已经落库，报错只会误导用户重传（也违反「整批成功」
+          的响应语义），何况这是**可修复**失败 —— 下一轮补偿会补上。
+        · **只兜 RedisError**。别的异常照旧往外抛：那是代码 bug，不该被这里吞掉，
+          更不该伪装成「队列暂时不可用」。
+        """
+        try:
+            count = await self.queue.enqueue_fifo_many(order_ids)
+        except RedisError as exc:
+            logger.warning(
+                "导入后入队 AI 分析失败（%d 单，order_ids=%s），"
+                "已落库、待 ai_reconciler 补偿：%s",
+                len(order_ids),
+                order_ids,
+                exc,
+            )
+            return
+        logger.info("导入后入队 AI 分析：%d 单", count)
 
     @staticmethod
     def _conflict_errors(

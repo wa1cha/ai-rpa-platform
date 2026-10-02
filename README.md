@@ -22,7 +22,7 @@
 | 2 | 订单模块 | ✅ 已完成 | Excel/CSV 导入（四道校验关卡）、订单列表/详情、导入批次 |
 | 3 | Redis 任务队列 | ✅ 已完成 | 任务生成、优先级出队、状态机、人工审核/重试/取消 |
 | 4 | RPA Worker | ✅ 已完成 | Playwright 驱动模拟 ERP，①→⑨ 全流程跑通；含幂等预检、失败截图、心跳、僵尸回收 |
-| 5 | AI 分析 | ⬜ 未实现 | `ai/` 为空壳；DeepSeek API key 已就绪 |
+| 5 | AI 分析 | ⬜ 未实现 | **地基已立**：`ai/` 已是可安装包（`pip install -e ai/`）、分析队列 `AI_QUEUE_KEY` 与「导入成功自动入队 + 周期性补偿」已就绪；分析逻辑本身（调 LLM、解析、规则合并）未实现 |
 | 6 | 前端 | ⬜ 未实现 | `frontend/` 为空壳（Vue3 骨架已预建） |
 | 7 | Docker + 云服务器部署 | ⬜ 未实现 | `docker-compose.yml` / `backend/Dockerfile` 已写好但**未经云上验证**；本地开发走 brew + 脚本 |
 | 8 | 压力测试 + 完善 | ⬜ 未实现 | |
@@ -65,13 +65,13 @@
 
 ## 业务流
 
-《需求规格》§5 定义的 15 步闭环。当前已跑通的是 **①→③、⑦→⑮**；第 ④→⑥ 步（AI 分析）属 Phase 5：
+《需求规格》§5 定义的 15 步闭环。当前已跑通的是 **①→④、⑦→⑮**；第 ⑤→⑥ 步（AI 分析与合并）属 Phase 5：
 
 ```
 ① 模拟平台生成订单 Excel/CSV
 ② 管理员在后台导入
 ③ FastAPI 校验并写入 MySQL(orders)
-④ 订单进入「待分析」队列
+④ 订单进入「待分析」队列（AI_QUEUE_KEY）
 ⑤ AI Worker 分析订单文本 → 写 ai_analyses          ← Phase 5 未实现
 ⑥ 硬规则引擎 + AI 结果合并 → 得出最终判定            ← Phase 5 未实现
 ⑦ 生成 RPA 任务(tasks)：无异常 → PENDING；有异常 → WAITING_REVIEW
@@ -100,10 +100,11 @@ cp .env.example .env          # 按注释填好 MySQL/Redis/账号/JWT 等
 ./scripts/init_db.sh          # 建库建表（主库 ai_rpa + 模拟 ERP 库 mock_erp），只需一次
 python scripts/seed_admin.py  # 创建管理员账号（口令读自 .env）
 python scripts/seed_worker.py # 创建 RPA Worker 账号（最小权限）
+pip install -e ai/            # 把 ai/ 装成可编辑包（backend 以规范包方式 import ai），只需一次
 
-./scripts/start.sh            # ① 主平台 backend      → logs/backend.log
-./scripts/start_workers.sh    # ② 作业进程（僵尸回收） → logs/workers.log
-./scripts/start_mock_erp.sh   # ③ 模拟 ERP            → logs/mock_erp.log
+./scripts/start.sh            # ① 主平台 backend  → logs/backend.log
+./scripts/start_workers.sh    # ② 作业进程（僵尸回收 + AI 补偿） → logs/workers.log
+./scripts/start_mock_erp.sh   # ③ 模拟 ERP  → logs/mock_erp.log
 ./scripts/run_rpa_worker.sh --foreground --headed   # ④ RPA Worker（--headed 看着它点）
 
 # 造一笔演示订单 + 任务，然后看 Worker 把它录进 ERP
@@ -136,7 +137,9 @@ python mock/platform/generate_orders.py --count 50      # 生成 CSV 到 mock/pl
 ## 目录结构
 
 ```
-ai/                 AI 分析（Phase 5，空壳）
+ai/                 AI 分析（Phase 5）—— 独立发行包 ai-rpa-analysis，import 名仍是 ai；
+                    模块树已预建（client/llm/extractor/classifier/prompts 均为 0 字节空壳），
+                    当前只有 pyproject.toml 有内容
 backend/            主平台 FastAPI 服务
   app/
     api/              路由层（见下方接口清单）
@@ -144,7 +147,7 @@ backend/            主平台 FastAPI 服务
     models/           SQLAlchemy 模型
     repositories/     数据访问层
     schemas/          Pydantic 请求/响应 + 统一响应外壳
-    services/         业务逻辑（导入、任务、队列、审核、RPA 结果处理…）
+    services/         业务逻辑（导入、任务、队列、审核、RPA 结果处理、AI 队列补偿…）
     workers/          作业进程（僵尸回收；ai_worker 待 Phase 5）
   var/                运行时产物（失败截图，不入库）
 config/             各进程配置样例（空壳，当前配置走 .env）
@@ -212,11 +215,12 @@ tests/              主平台测试（backend）
 | Redis | `REDIS_HOST` `REDIS_PORT` `REDIS_DB` `REDIS_PASSWORD` | 任务队列 |
 | JWT | `JWT_SECRET` `JWT_ALGORITHM` `JWT_EXPIRE_MINUTES` | |
 | 账号种子 | `ADMIN_USERNAME/PASSWORD`、`WORKER_USERNAME/PASSWORD` | 由 `seed_admin.py` / `seed_worker.py` 读取 |
-| 队列 / 僵尸回收 | `ZOMBIE_TIMEOUT_SECONDS` `ZOMBIE_SCAN_INTERVAL_SECONDS` | 超过时限没心跳的任务被回收重排 |
-| AI（Phase 5） | `AI_BASE_URL` `AI_API_KEY` `AI_MODEL` `AI_TIMEOUT_SECONDS` `AI_WORKER_CONCURRENCY` | |
+| 队列 / 僵尸回收 | `TASK_QUEUE_KEY` `ZOMBIE_TIMEOUT_SECONDS` `ZOMBIE_SCAN_INTERVAL_SECONDS` | 超过时限没心跳的任务被回收重排 |
+| AI 分析队列 | `AI_QUEUE_KEY` `AI_ENQUEUE_GRACE_SECONDS` `AI_ANALYZING_TIMEOUT_SECONDS` | **刻意与任务队列分开的第二个 key**：任务队列按优先级出队（HIGH 能插队），分析队列只能 FIFO（分析前不知道紧急度，那正是分析的产出）。后两项是补偿扫描的两条时间线 |
+| AI（Phase 5） | `AI_BASE_URL` `AI_API_KEY` `AI_MODEL` `AI_TIMEOUT_SECONDS` `AI_WORKER_CONCURRENCY` | 分析与合并逻辑未实现 |
 | RPA Worker | `RPA_API_BASE_URL` `RPA_WORKER_NAME` `RPA_HEADLESS` `RPA_NAV_TIMEOUT_MS` `RPA_ACTION_TIMEOUT_MS` `RPA_POLL_WAIT_SECONDS` `RPA_HEARTBEAT_SECONDS` | |
 | 模拟 ERP | `MOCK_ERP_BASE_URL` `MOCK_ERP_USERNAME` `MOCK_ERP_PASSWORD` `MOCK_ERP_HOST` `MOCK_ERP_PORT` `MOCK_ERP_DB` `MOCK_ERP_SESSION_SECRET` `MOCK_ERP_SESSION_MINUTES` `MOCK_ERP_PAGE_DELAY_MS` `MOCK_ERP_FAIL_RATE` `MOCK_ERP_ENABLE_REVIEW_PAGE` | `MOCK_ERP_PAGE_DELAY_MS` 刻意让每次跳转变慢，逼 RPA 用「等待」而不是「睡觉」；`MOCK_ERP_FAIL_RATE` 用于故障注入 |
-| 其他 | `TASK_QUEUE_KEY` `SCREENSHOT_MAX_BYTES` | |
+| 其他 | `SCREENSHOT_MAX_BYTES` `SCREENSHOT_DIR` | |
 
 ---
 
@@ -227,7 +231,7 @@ tests/              主平台测试（backend）
 ```bash
 PY=/opt/anaconda3/envs/ai-rpa/bin/python   # 或 .env 里 PYTHON_BIN 指向的解释器
 
-$PY -m pytest                    # 主平台 backend  —— 118 个
+$PY -m pytest                    # 主平台 backend  —— 135 个
 $PY -m pytest mock/erp           # 模拟 ERP         —— 93 个
 $PY -m pytest rpa/tests          # RPA Worker 单元  —— 63 个（默认跳过 e2e）
 $PY -m pytest rpa/tests -m e2e   # RPA 端到端        —— 2 个（见下）
@@ -251,6 +255,15 @@ $PY -m pytest rpa/tests -m e2e   # RPA 端到端        —— 2 个（见下）
 - **订单导入要求整批成功，不做部分成功**：任何一行不合法，整批零插入。
 - **无多角色权限体系**：v1 只有管理员（外加一个权限最小的 Worker 角色）。
 - **通知渠道未真实接入**：通知只落库，不发企业微信/钉钉/短信。
+- **任务队列只有手动对账**：Redis 任务队列丢了或变脏时，只有手动跑
+  `python scripts/gen_tasks.py --reconcile` 重建（它是「先清空再全量重写」，
+  属**停机维护操作**，不能有 Worker 在跑）。
+  AI 分析队列这一侧已经有周期性自动补偿（`services/ai_reconciler.py`，扫库补 L1/L2），
+  但**任务队列这一侧没有** —— 这是刻意留的差异，两边补起来要动的面不一样大。
+- **AI 补偿的 L3 腿未排**：`ANALYZED` 但没生成任务的订单，本该由补偿补上任务；
+  当前 `TaskService.generate()` 不带状态过滤（会把 `IMPORTED` 的单也建出任务，
+  等于绕过分析），且全代码库没有任何地方推进到 `TASK_CREATED`。
+  这两件事与 AI 分析逻辑一起在下一个切片做。
 
 ---
 
