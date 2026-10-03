@@ -1,0 +1,22 @@
+{
+  "name": "ai-rpa-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-RPA 电商订单自动化平台 —— 管理后台（Vue 3 + Vite）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "pinia": "^2.2.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^5.4.11"
+  }
+}
