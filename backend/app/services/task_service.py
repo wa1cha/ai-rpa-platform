@@ -291,6 +291,15 @@ class TaskService:
 
         `block_seconds > 0` 时走 Redis 的阻塞版出队（见 `QueueService.pop_one`），
         claim 接口传 30 秒做长轮询，避免 Worker 空转轮询打满 MySQL。
+
+        **回查前必须先 `rollback()` 丢掉旧快照**：调用方（`/rpa/tasks/claim`）
+        在进入本函数之前，鉴权依赖 `get_current_user` 已经查过一次库，而本请求
+        与它共用同一个 session（FastAPI 缓存 `get_db`）—— MySQL 默认 REPEATABLE
+        READ，那次 SELECT 就把事务快照固定了。随后这里可能刚在 `bzpopmin` 上挂了
+        最多 30 秒；期间别的连接新提交的 `QUEUED` 任务，在旧快照里根本不存在，
+        于是被误判成「已失效的队列残留」丢掉 —— 表现是**新任务一条都领不到，
+        Worker 一直空轮询**。回滚只读事务即可，下一次 `get` 取新快照重读。
+        鉴权到此刻之间没有任何写入，回滚没有副作用。
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + block_seconds if block_seconds > 0 else None
@@ -309,6 +318,8 @@ class TaskService:
                 task_id = await self.queue.pop_one(block_seconds=remaining)
                 if task_id is None:
                     return None
+
+                await self.session.rollback()
 
                 task = await self.tasks.get(task_id)
                 if task is not None and task.status == TaskStatus.QUEUED:

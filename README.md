@@ -24,7 +24,7 @@
 | 4 | RPA Worker | ✅ 已完成 | Playwright 驱动模拟 ERP，①→⑨ 全流程跑通；含幂等预检、失败截图、心跳、僵尸回收 |
 | 5 | AI 分析 | ✅ 已完成 | `ai/` 是可安装包；导入后自动入队 → AI Worker 出队调 DeepSeek → 硬规则合并 → 落 `ai_analyses` → 订单 `ANALYZED` → 建任务 `TASK_CREATED`；含 `GET/POST /ai-analyses` 两个运营端点、`POST /orders/{id}/reanalyze` 重分析端点与 prompt 评测脚本 |
 | 6 | 前端 | ✅ 已完成 | Vue3 + Vite 管理后台（登录鉴权、看板、订单/任务/AI 分析/导入批次/通知、导入与复核操作）；**手写 CSS 无组件库**，dev 期走 Vite 代理免 CORS；同时补齐后端 `dashboard`/`notifications` 三个端点 |
-| 7 | Docker + 云服务器部署 | ⬜ 未实现 | `docker-compose.yml` / `backend/Dockerfile` 已写好但**未经云上验证**；本地开发走 brew + 脚本 |
+| 7 | Docker + 云服务器部署 | 🟡 本机 Docker 完成 | 8 服务 compose 一键起全套（MySQL/Redis/backend/workers/seed/mock-erp/rpa-worker/frontend），完整跑通「导入→AI→RPA→ERP」；**云服务器尚未部署** |
 | 8 | 压力测试 + 完善 | ⬜ 未实现 | |
 
 **当前可以完整演示的闭环**：导入订单 → AI 分析（调 LLM + 硬规则合并） → 生成任务 → 入队 → RPA Worker 领取 → 驱动模拟 ERP 录单 → 回传结果 → 管理员接口查询。
@@ -128,6 +128,24 @@ npm run dev     # 起 Vite dev server → http://localhost:5173
 dev server 通过 Vite 代理把 `/api` 转发到 `http://127.0.0.1:8000`，
 **后端刻意不开 CORS** —— 开发期的跨域交给代理，生产由 nginx 收口（Phase 7）。
 用 `.env` 里的管理员账号登录。生产构建 `npm run build`（`dist/` 与 `node_modules/` 已 gitignore）。
+
+### Docker 一键起全套（Phase 7）
+
+装了 Docker Desktop 后不必一个个起进程 —— compose 把 8 个服务一次拉齐：
+
+```bash
+cp .env.example .env      # 填好 MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD / JWT_SECRET / ADMIN_PASSWORD / WORKER_PASSWORD 等
+./scripts/deploy.sh up    # = docker compose up -d --build
+open http://localhost:8080  # 唯一对外端口；用 .env 里的管理员账号登录
+```
+
+`seed` 是一次性服务：首次起容器时自动建管理员/Worker 账号、种黑名单、并导入
+`database/seed/04_orders_sample.csv` 的 7 笔样例订单，跑完即退。MySQL 数据卷非空时
+不再重灌（想重来跑 `./scripts/deploy.sh reset`，它 `down -v` 清卷）。
+
+容器内一律用服务名寻址（`mysql` / `redis` / `backend` / `mock-erp`）；backend:8000、
+mock-erp:8001、MySQL、Redis 都**不**映射到宿主机 —— 只有前端 8080 对外。
+`./scripts/deploy.sh logs` 看日志、`down` 停（保留数据）。详见 [`docs/部署说明.md`](docs/部署说明.md)。
 
 ### 造一批订单来导入
 
@@ -253,7 +271,7 @@ tests/              主平台测试（backend）+ AI 包单测与评测集（tes
 ```bash
 PY=/opt/anaconda3/envs/ai-rpa/bin/python   # 或 .env 里 PYTHON_BIN 指向的解释器
 
-$PY -m pytest                    # 主平台 backend + AI 包单测 —— 245 个（见下）
+$PY -m pytest                    # 主平台 backend + AI 包单测 —— 246 个（见下）
 $PY -m pytest mock/erp           # 模拟 ERP                  —— 93 个
 $PY -m pytest rpa/tests          # RPA Worker 单元           —— 63 个（默认跳过 e2e）
 $PY -m pytest rpa/tests -m e2e   # RPA 端到端                 —— 2 个（见下）

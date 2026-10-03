@@ -5,6 +5,10 @@ uvicorn[standard]>=0.32,<1.0
 # ---- 数据库（异步）----
 sqlalchemy[asyncio]>=2.0,<3.0
 asyncmy>=0.2.10
+#: MySQL 8.4 默认认证插件是 caching_sha2_password，首次握手要走 RSA，
+#: asyncmy 靠它实现 —— 缺了会在第一次连库时抛 RuntimeError（本机 root 无密码
+#: 时走不上这条路，所以只有容器化 + 带密码账号才暴露）。
+cryptography>=43.0
 
 # ---- 缓存 / 任务队列 ----
 redis>=5.2,<6.0

@@ -1,12 +1,19 @@
-# 构建上下文是仓库根目录（docker-compose.yml 里 context: .），
-# 这里排掉的东西不会被送进构建进程，也就进不了镜像。
+# ============================================================
+# 构建上下文排除清单 —— 只作用于「以仓库根为上下文」的镜像：
+#   app 镜像（backend / workers / seed 共用，dockerfile: backend/Dockerfile）
+#
+# 其余镜像各自以子目录为上下文，不受本文件影响：
+#   mock-erp → mock/erp/.dockerignore
+#   rpa      → rpa/.dockerignore
+#   frontend → frontend/.dockerignore
+# ============================================================
 
 # ---------- 密钥：必须挡在镜像之外 ----------
 # .env 里有 JWT_SECRET、MySQL 口令。运行时由 compose 的 `env_file: .env`
-# 注入环境变量，不需要、也绝不该把它烤进镜像层 ——
-# 镜像层是分层可读的，删掉文件也不会让它从历史层里消失。
+# 注入环境变量，不需要、也绝不该把它烤进镜像层 —— 镜像层是分层可读的。
 .env
 .env.*
+!.env.example
 
 # ---------- 版本控制 ----------
 .git
@@ -19,22 +26,22 @@
 venv/
 
 # ---------- 测试 ----------
-# 测试要连 MySQL / Redis 和测试库，不该在运行镜像里跑；
-# 打进来只是白白增大镜像、还多暴露一份测试数据。
+# 测试要连 MySQL / Redis 和测试库，不该进运行镜像。
 tests/
 pytest.ini
 .pytest_cache/
 
-# ---------- 与后端镜像无关的目录 ----------
+# ---------- 与本镜像无关的目录 ----------
+# ai/、scripts/、database/seed/ 是 app 镜像要用的，**不排除**。
 frontend/
 rpa/
-ai/
 mock/
 docs/
-database/
-config/
 logs/
-scripts/
+config/
+docker/
+database/schema/
+database/migrations/
 
 # ---------- 杂项 ----------
 *.md
@@ -42,3 +49,4 @@ scripts/
 docker-compose.yml
 .dockerignore
 Dockerfile
+Dockerfile.dockerignore

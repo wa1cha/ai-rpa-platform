@@ -21,6 +21,8 @@ itsdangerous>=2.2,<3.0
 # ---- 数据库（异步，独立库 mock_erp）----
 sqlalchemy[asyncio]>=2.0,<3.0
 asyncmy>=0.2.10
+#: 同 backend：MySQL 8.4 的 caching_sha2_password 首次握手要它。
+cryptography>=43.0
 
 # ---- 配置与校验 ----
 pydantic>=2.10,<3.0

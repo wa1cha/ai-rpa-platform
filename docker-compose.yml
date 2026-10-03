@@ -1,24 +1,33 @@
 # ============================================================
-# Docker Compose —— Phase 7 部署用
+# Docker Compose —— Phase 7 本机部署
 #
-# 说明：Phase 1~6 本地开发用 brew 起的 MySQL/Redis（见 scripts/start.sh），
-#       不用这个文件。等到 Phase 7 需要"环境一致性 + 一键部署"时再启用。
+# 一条命令起全套 8 个服务，完整跑通：
+#   Frontend → Backend → MySQL/Redis → AI Worker → RPA Worker → Mock ERP → 结果回写
 #
 # 用法：
-#   docker compose up -d          # 起全部
-#   docker compose up -d mysql redis && docker compose logs -f   # 只起基础设施
-#   docker compose down           # 停
+#   docker compose up -d --build   # 构建并起全部（首次必须带 --build）
+#   docker compose logs -f         # 看日志
+#   docker compose down            # 停（保留数据卷）
+#   docker compose down -v         # 停并清空数据卷（下次会重新初始化 + 灌种子）
+#
+# 访问：只有前端对外 —— http://localhost:8080
+#       backend:8000 / mock-erp:8001 / mysql / redis 都在 compose 内网，不映射到宿主机。
+#
+# 配置全部来自 .env（env_file 注入）；下面 environment 里的项是「容器内寻址覆盖」——
+# .env 里写的是 127.0.0.1，在容器网络里必须换成服务名。
 # ============================================================
 
 services:
+  # ----------------------------------------------------------
+  # ① 数据库：主库 ai_rpa + 模拟 ERP 库 mock_erp
+  # ----------------------------------------------------------
   mysql:
-    # 本地开发用的是 brew 装的 MySQL 9.6，这里用 8.4 LTS（长期支持版）。
-    # 本项目用到的特性（utf8mb4 / InnoDB / JSON 列）在两者上行为一致。
     image: mysql:8.4
     container_name: ai-rpa-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      # 官方镜像会自动建这个库并把 MYSQL_USER 授权到它；mock_erp 由 init 脚本补建。
       MYSQL_DATABASE: ${MYSQL_DB:-ai_rpa}
       MYSQL_USER: ${MYSQL_USER:-ai_rpa}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
@@ -27,13 +36,13 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --default-time-zone=+08:00
-    ports:
-      - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      # 容器首次启动时按文件名顺序执行，自动建表灌种子
-      - ./database/schema:/docker-entrypoint-initdb.d/01-schema:ro
-      - ./database/seed:/docker-entrypoint-initdb.d/02-seed:ro
+      # 容器首次初始化（数据目录为空）时执行的脚本目录
+      - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
+      # init 脚本要读的表结构与 ERP 种子，挂只读进去
+      - ./database/schema:/init/schema:ro
+      - ./database/seed:/init/seed:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -41,13 +50,14 @@ services:
       retries: 10
       start_period: 30s
 
+  # ----------------------------------------------------------
+  # ② 队列：任务队列 + AI 分析队列
+  # ----------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: ai-rpa-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -56,22 +66,57 @@ services:
       timeout: 3s
       retries: 5
 
+  # ----------------------------------------------------------
+  # ③ 一次性种子：建账号 + 黑名单 + 导入 7 笔样例订单，跑完即退
+  #    与 backend/workers 共用 app 镜像，只是 command 不同。
+  # ----------------------------------------------------------
+  seed:
+    image: ai-rpa-app:local
+    container_name: ai-rpa-seed
+    env_file: .env
+    environment:
+      MYSQL_HOST: mysql
+      REDIS_HOST: redis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # 四个脚本都幂等（表非空即跳过），重复 up 不会重复灌。
+    command:
+      - sh
+      - -c
+      - >
+        python scripts/seed_admin.py &&
+        python scripts/seed_worker.py &&
+        python scripts/seed_blacklist.py &&
+        python scripts/seed_demo_orders.py
+    restart: "no"
+
+  # ----------------------------------------------------------
+  # ④ 主平台 API
+  # ----------------------------------------------------------
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: ai-rpa-app:local
     container_name: ai-rpa-backend
     restart: unless-stopped
     env_file: .env
     environment:
-      # 容器内要用服务名而不是 127.0.0.1
+      # 容器内用服务名而不是 127.0.0.1
       MYSQL_HOST: mysql
       REDIS_HOST: redis
-      # 应用配置里 app_host 默认是 127.0.0.1，在容器里等于「只监听自己」——
-      # 宿主机和健康检查都连不上。必须在这里覆盖成 0.0.0.0。
+      # 应用默认 app_host=127.0.0.1，在容器里等于「只监听自己」，必须覆盖
       APP_HOST: 0.0.0.0
-    ports:
-      - "8000:8000"
+      # 关键：erp_url 由 **backend** 下发（rpa_service.py 把 settings.mock_erp_base_url
+      # 塞进 instruction）。.env 里是 127.0.0.1:8001，在容器网络里指不到 mock-erp，
+      # 必须换成服务名 —— 否则 Worker 拿到地址后 ERR_CONNECTION_REFUSED。
+      MOCK_ERP_BASE_URL: http://mock-erp:8001
+    volumes:
+      # RPA 上传的失败截图存这里，持久化，重建容器不丢
+      - backend_screenshots:/app/backend/var/screenshots
     depends_on:
       mysql:
         condition: service_healthy
@@ -84,6 +129,91 @@ services:
       retries: 5
       start_period: 20s
 
+  # ----------------------------------------------------------
+  # ⑤ 作业进程：僵尸回收 + AI 补偿 + AI 分析（与 backend 同一镜像）
+  # ----------------------------------------------------------
+  workers:
+    image: ai-rpa-app:local
+    container_name: ai-rpa-workers
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_HOST: mysql
+      REDIS_HOST: redis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "app.workers.main"]
+
+  # ----------------------------------------------------------
+  # ⑥ 模拟 ERP（别人家的老系统，独立库 mock_erp）
+  # ----------------------------------------------------------
+  mock-erp:
+    build:
+      context: ./mock/erp
+      dockerfile: Dockerfile
+    image: ai-rpa-mock-erp:local
+    container_name: ai-rpa-mock-erp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_HOST: mysql
+      MOCK_ERP_HOST: 0.0.0.0
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ----------------------------------------------------------
+  # ⑦ RPA Worker（Playwright 驱动模拟 ERP）
+  # ----------------------------------------------------------
+  rpa-worker:
+    build:
+      context: ./rpa
+      dockerfile: Dockerfile
+    image: ai-rpa-worker:local
+    container_name: ai-rpa-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Worker 走 HTTP 连主平台。留空时它按 APP_HOST/APP_PORT 推导，
+      # 容器里 APP_HOST=0.0.0.0 推不出可达地址，所以这里显式给服务名。
+      RPA_API_BASE_URL: http://backend:8000/api/v1
+      # 注意：ERP 地址由 backend 随 instruction 下发，Worker 不读 MOCK_ERP_BASE_URL，
+      # 所以这一项不在这里配（配了也不生效）—— 见 backend 服务的同名项。
+      # 容器里没有显示器，只能无头
+      RPA_HEADLESS: "true"
+    depends_on:
+      backend:
+        condition: service_healthy
+      mock-erp:
+        condition: service_healthy
+
+  # ----------------------------------------------------------
+  # ⑧ 前端（nginx 托管静态产物 + 反代 /api）
+  # ----------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ai-rpa-frontend:local
+    container_name: ai-rpa-frontend
+    restart: unless-stopped
+    ports:
+      # 唯一对外端口：宿主机 8080 → 容器 80
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   mysql_data:
   redis_data:
+  backend_screenshots:
