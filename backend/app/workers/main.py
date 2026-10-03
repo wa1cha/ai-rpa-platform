@@ -49,6 +49,7 @@ def build_jobs() -> list[Job]:
     之前的那几行日志，而不是卡在 ORM 初始化上。
     """
     from app.services.ai_reconciler import reconcile_once
+    from app.workers.ai_worker import analyze_once
     from app.workers.zombie_reaper import reap_once
 
     return [
@@ -57,12 +58,19 @@ def build_jobs() -> list[Job]:
             interval_seconds=settings.zombie_scan_interval_seconds,
             run=reap_once,
         ),
-        # AI 分析队列的补偿（L1 入队失败 / L2 分析超时）。与僵尸回收共用同一个
-        # 扫描周期：两者都是「扫库看有没有卡住的单」，没有理由分成两个频率。
+        # AI 分析队列的补偿（L1 入队失败 / L2 分析超时 / L3 已分析未建任务）。
+        # 与僵尸回收共用同一个扫描周期：两者都是「扫库看有没有卡住的单」，
+        # 没有理由分成两个频率。
         Job(
             name="ai_reconciler",
             interval_seconds=settings.zombie_scan_interval_seconds,
             run=reconcile_once,
+        ),
+        # AI 分析本身。**每轮排空队列**，所以 interval 只在队列空时才起作用。
+        Job(
+            name="ai_worker",
+            interval_seconds=settings.ai_worker_poll_interval_seconds,
+            run=analyze_once,
         ),
     ]
 

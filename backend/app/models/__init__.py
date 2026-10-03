@@ -12,6 +12,7 @@ repository 层用显式 JOIN 或相关子查询取，写起来多几行，但行
 
 from app.models.ai_analysis import AiAnalysis
 from app.models.ai_review_log import AiReviewLog
+from app.models.customer_blacklist import CustomerBlacklist
 from app.models.import_batch import ImportBatch
 from app.models.notification import Notification
 from app.models.order import Order
@@ -22,6 +23,7 @@ from app.models.user import User
 __all__ = [
     "AiAnalysis",
     "AiReviewLog",
+    "CustomerBlacklist",
     "ImportBatch",
     "Notification",
     "Order",

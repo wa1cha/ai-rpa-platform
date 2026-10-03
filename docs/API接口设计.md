@@ -385,13 +385,15 @@ Content-Type: multipart/form-data
 
 ### 6.4 重新触发 AI 分析
 
+> **已实现**（Phase 5）。
+
 ```
 POST /api/v1/orders/{id}/reanalyze
 ```
 
 **权限**：管理员
 
-**请求体**
+**请求体**（**可整个省略**）
 
 ```json
 {
@@ -399,12 +401,22 @@ POST /api/v1/orders/{id}/reanalyze
 }
 ```
 
-**响应**：`data: { "order_id": 1001, "status": "ANALYZING" }`
+**响应**：`data: { "order_id": 1001, "status": "IMPORTED" }`
+
+> 响应里的 `status` 是 **`IMPORTED`（待分析）**，不是 `ANALYZING`。真正把订单
+> 置成 `ANALYZING` 的是 AI Worker 出队后的 CAS（`IMPORTED → ANALYZING`）；
+> 这里若抢先置成 `ANALYZING`，Worker 的条件更新会拿 0 行而跳过该单。
+> `IMPORTED` 在本系统里就是「待分析」态（导入接口也是这么置的 + 入队）。
 
 **说明**
-- 允许状态：`ANALYZED` / `TASK_CREATED`（即已分析过的订单）
-- 若关联任务已进入 `RUNNING` 或终态，返回 `4009`
+- 允许状态：`ANALYZED` / `TASK_CREATED`（即已分析过的订单）；其余状态返回 `4009`
+- 若关联任务已进入 `RUNNING` 或终态（`SUCCESS`/`FAILED`/`CANCELLED`），返回 `4009`；
+  尚未执行的任务（`PENDING` / `QUEUED` / `WAITING_REVIEW`）会被**删除并重建**
+  —— 订单与任务是 1:1，若不删，新分析会被「只给无任务订单建任务」的反连接静默跳过
 - 重新分析会在 `ai_analyses` **新增一条记录**，不覆盖旧记录，便于对比模型效果
+- `reason` 只记日志、不落库（一次重分析新增的分析行本身即记录）
+- 顺序：先在同一事务里把订单退回 `IMPORTED` 并删除旧任务，**再**动 Redis
+  （摘任务队列、重入 AI 队列）；入队失败不报错，交由 AI 补偿 L1 兜底
 
 ---
 
@@ -467,6 +479,9 @@ GET /api/v1/import-batches/{id}
 ---
 
 ## 8. AI 分析 AI Analyses
+
+> **已实现**（Phase 5）。两个端点均已挂载（`backend/app/api/ai_analyses.py`），
+> 契约与下文一致；过滤字段以 `AiAnalysisRepository` 实际支持的为准。
 
 ### 8.1 分析结果列表
 

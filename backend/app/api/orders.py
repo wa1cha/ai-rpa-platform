@@ -10,7 +10,13 @@ from app.core.enums import OrderStatus
 from app.core.exceptions import ParamError
 from app.repositories.order_repository import OrderFilters
 from app.schemas.common import ApiResponse, Page, PageParams
-from app.schemas.order import OrderDetail, OrderImportResult, OrderListItem
+from app.schemas.order import (
+    OrderDetail,
+    OrderImportResult,
+    OrderListItem,
+    OrderReanalyzeRequest,
+    OrderReanalyzeResult,
+)
 from app.services.import_service import MAX_FILE_BYTES, ImportService
 from app.services.order_service import OrderService
 
@@ -106,3 +112,25 @@ async def get_order(
 ) -> ApiResponse[OrderDetail]:
     detail = await OrderService(session).get_detail(order_id)
     return ApiResponse.ok(detail)
+
+
+@router.post(
+    "/{order_id}/reanalyze",
+    response_model=ApiResponse[OrderReanalyzeResult],
+    summary="重新触发 AI 分析",
+    description=(
+        "把已分析过的订单退回待分析，清掉尚未执行的旧任务并重新入队。"
+        "任务已被 RPA 执行（RUNNING 或终态）时返回 4009。"
+    ),
+)
+async def reanalyze_order(
+    order_id: int,
+    admin: AdminUser,
+    session: SessionDep,
+    payload: OrderReanalyzeRequest | None = None,
+) -> ApiResponse[OrderReanalyzeResult]:
+    # body 可整个省略 —— 重分析本身不需要参数，`reason` 只是留给日志的一句人话。
+    result = await OrderService(session).reanalyze(
+        order_id, payload.reason if payload else None
+    )
+    return ApiResponse.ok(result)

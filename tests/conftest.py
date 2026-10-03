@@ -57,12 +57,23 @@ import pytest  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
+from ai.classifier.order_classifier import AnalysisResult  # noqa: E402
+from ai.client import AnalysisOutcome  # noqa: E402
+from ai.llm.base import TokenUsage  # noqa: E402
 from app.core.config import settings  # noqa: E402
-from app.core.enums import OrderStatus, Priority, TaskStatus, UserRole  # noqa: E402
+from app.core.enums import (  # noqa: E402
+    AiAnalysisStatus,
+    OrderStatus,
+    Priority,
+    RiskLevel,
+    TaskStatus,
+    UserRole,
+)
 from app.core.security import create_access_token, hash_password  # noqa: E402
 from app.database.mysql import AsyncSessionLocal  # noqa: E402
 from app.database.redis import redis_client  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models.ai_analysis import AiAnalysis  # noqa: E402
 from app.models.order import Order  # noqa: E402
 from app.models.task import Task  # noqa: E402
 from app.models.user import User  # noqa: E402
@@ -78,6 +89,7 @@ _APP_TABLES = (
     "ai_analyses",
     "orders",
     "import_batches",
+    "customer_blacklist",
     "users",
 )
 
@@ -366,3 +378,77 @@ async def make_task(db_session: AsyncSession) -> Callable[..., Awaitable[Task]]:
         return task
 
     return _make
+
+
+@pytest.fixture
+async def make_analysis(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[AiAnalysis]]:
+    """造一条分析记录（默认 SUCCESS + 低风险）。用例只覆盖自己关心的字段。"""
+    counter = 0
+
+    async def _make(order: Order, **overrides) -> AiAnalysis:
+        nonlocal counter
+        counter += 1
+        data: dict = {
+            "order_id": order.id,
+            "priority": Priority.MEDIUM.value,
+            "deadline": "NONE",
+            "need_contact": False,
+            "risk_level": RiskLevel.LOW.value,
+            "risk_reason": f"AI 判定为低风险（{counter}）",
+            "action": "直接录入 ERP",
+            "model_name": "deepseek-chat",
+            "prompt_version": "v1",
+            "status": AiAnalysisStatus.SUCCESS.value,
+        }
+        data.update(overrides)
+        analysis = AiAnalysis(**data)
+        db_session.add(analysis)
+        await db_session.commit()
+        return analysis
+
+    return _make
+
+
+class FakeAnalyzer:
+    """`ai.client.OrderAnalyzer` 的测试替身 —— 不联网、不连库。
+
+    比 `unittest.mock.AsyncMock` 更合适的地方在于：它能**编排失败**
+    （给 `error` 赋一个异常实例，`analyze()` 就抛它），而「LLM 彻底失败」
+    正是 `ai_service` 最重要的一条分支，必须能稳定复现。
+    """
+
+    def __init__(self) -> None:
+        self.result = AnalysisResult(
+            priority="MEDIUM",
+            deadline="NONE",
+            need_contact=False,
+            risk_level="LOW",
+            risk_reason="",
+            action="直接录入 ERP",
+        )
+        self.raw: dict | None = {"priority": "MEDIUM", "risk_level": "LOW"}
+        self.error: BaseException | None = None
+        self.model = "fake-model"
+        #: 每次调用收到的 `OrderInput`，用来断言「到底分析了几单」。
+        self.calls: list = []
+
+    async def analyze(self, order) -> AnalysisOutcome:
+        self.calls.append(order)
+        if self.error is not None:
+            raise self.error
+        return AnalysisOutcome(
+            result=self.result,
+            raw=self.raw,
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=5),
+            model=self.model,
+            prompt_version="v2",
+        )
+
+
+@pytest.fixture
+def fake_analyzer() -> FakeAnalyzer:
+    """默认的假分析器：返回一条低风险结果。用例可直接改它的 `result` / `error`。"""
+    return FakeAnalyzer()
+

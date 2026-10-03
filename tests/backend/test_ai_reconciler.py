@@ -12,11 +12,18 @@
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import func, select
 
 from app.core.config import settings
-from app.core.enums import OrderStatus
+from app.core.enums import OrderStatus, TaskStatus
 from app.database.redis import redis_client
-from app.services.ai_reconciler import reconcile_ai_queue, reconcile_once
+from app.models.task import Task
+from app.repositories.task_repository import TaskRepository
+from app.services.ai_reconciler import (
+    reconcile_ai_queue,
+    reconcile_once,
+    reconcile_task_creation,
+)
 from app.services.queue_service import QueueService
 
 #: 所有用例共用的「现在」。固定住，才能让 cutoff 与 updated_at 的先后可复现。
@@ -153,3 +160,88 @@ async def test_reconcile_once_uses_the_configured_queue_key(make_order):
     assert await QueueService(
         redis_client, key=settings.ai_queue_key
     ).peek(10) == [stale.id]
+
+
+# ============================================================
+# L3 —— ANALYZED 超时且没任务 → 补建任务
+# ============================================================
+
+
+async def _l3(session, task_queue):
+    return await reconcile_task_creation(session, task_queue, cutoff=GRACE)
+
+
+@pytest.mark.integration
+async def test_l3_creates_a_task_for_an_analyzed_order_without_one(
+    db_session, queue, make_order
+):
+    """worker「分析完顺手建任务」那步没跑成 → 补偿补上，并把订单推到 TASK_CREATED。"""
+    order = await make_order(status=OrderStatus.ANALYZED.value, updated_at=OLD)
+
+    created = await _l3(db_session, queue)
+
+    assert created == 1
+    task = await TaskRepository(db_session).get_by_order_id(order.id)
+    assert task is not None
+    assert task.status == TaskStatus.QUEUED.value
+    await db_session.refresh(order)
+    assert order.status == OrderStatus.TASK_CREATED.value
+
+
+@pytest.mark.integration
+async def test_l3_leaves_an_analyzed_order_that_already_has_a_task(
+    db_session, queue, make_order, make_task
+):
+    """已经有任务的单不该被补建第二张 —— `Task.id IS NULL` 反连接挡的就是这个。
+
+    否则一轮补偿会给同一单建出重复任务，`tasks.order_id` 的唯一约束会直接报错。
+    """
+    order = await make_order(status=OrderStatus.TASK_CREATED.value, updated_at=OLD)
+    await make_task(order, status=TaskStatus.QUEUED.value)
+
+    created = await _l3(db_session, queue)
+
+    assert created == 0
+    count = (
+        await db_session.execute(
+            select(func.count()).select_from(Task).where(Task.order_id == order.id)
+        )
+    ).scalar_one()
+    assert count == 1
+    assert await queue.size() == 0
+
+
+@pytest.mark.integration
+async def test_l3_ignores_orders_that_have_not_been_analyzed(
+    db_session, queue, make_order
+):
+    """`statuses=[ANALYZED]` 的下游效果：IMPORTED 的单即便够陈旧也不会被建任务。
+
+    这条实际是 L1 与 L3 的分界：L1 负责把 IMPORTED 的单重新推回分析队列，
+    L3 绝不能顺手把它直接建成任务（那就绕过分析了）。
+    """
+    await make_order(status=OrderStatus.IMPORTED.value, updated_at=OLD)
+
+    created = await _l3(db_session, queue)
+
+    assert created == 0
+    assert await queue.size() == 0
+
+
+@pytest.mark.integration
+async def test_reconcile_once_runs_all_three_legs(db_session, queue, make_order):
+    """`reconcile_once` 一次跑齐三条腿：L1 重排、L3 补建任务，各管各的。
+
+    用真实 `now` 造两张够陈旧的单：一张 IMPORTED（L1 命中）、
+    一张 ANALYZED 无任务（L3 命中），看一轮之后两条腿都落地了。
+    """
+    stale_imported = await make_order(status=OrderStatus.IMPORTED.value, updated_at=OLD)
+    stale_analyzed = await make_order(status=OrderStatus.ANALYZED.value, updated_at=OLD)
+
+    report = await reconcile_once()
+
+    assert report.requeued_imported == 1
+    assert report.order_ids == [stale_imported.id]
+    assert report.tasks_created == 1
+    await db_session.refresh(stale_analyzed)
+    assert stale_analyzed.status == OrderStatus.TASK_CREATED.value

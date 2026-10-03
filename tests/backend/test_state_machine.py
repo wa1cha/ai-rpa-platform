@@ -15,8 +15,9 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.core.enums import Priority, ReviewResult, RiskLevel, TaskStatus
+from app.core.enums import OrderStatus, Priority, ReviewResult, RiskLevel, TaskStatus
 from app.core.exceptions import ErrorCode, InvalidStateError
+from app.models.order import Order
 from app.models.task import Task
 from app.services.task_service import TaskService
 
@@ -145,6 +146,75 @@ async def test_generate_with_force_review_holds_task_out_of_the_queue(
     task_id = report.task_ids[0]
     assert await _db_status(db_session, task_id) == TaskStatus.WAITING_REVIEW.value
     assert not await _in_queue(queue, task_id)
+    assert await queue.size() == 0
+
+
+# ============================================================
+# integration —— 订单随建任务推进到 TASK_CREATED
+# ============================================================
+
+
+async def _order_status(session, order_id: int) -> str:
+    return (
+        await session.execute(select(Order.status).where(Order.id == order_id))
+    ).scalar_one()
+
+
+@pytest.mark.integration
+async def test_generate_promotes_an_analyzed_order_to_task_created(
+    db_session, queue, make_order
+):
+    """AI 路径：给一张 `ANALYZED` 的单建任务后，订单要推进到 `TASK_CREATED`。
+
+    这一步此前全代码库都缺失 —— 订单分析完就永远停在 ANALYZED，
+    「订单已进 ERP」这个状态没人写。`statuses=[ANALYZED]` 正是 AI 侧
+    （worker / L3 补偿）传进来的形态。
+    """
+    order = await make_order(status=OrderStatus.ANALYZED.value)
+
+    report = await TaskService(db_session, queue).generate(
+        order_ids=[order.id], statuses=[OrderStatus.ANALYZED]
+    )
+
+    assert report.created == 1
+    assert report.orders_promoted == 1
+    assert await _order_status(db_session, order.id) == OrderStatus.TASK_CREATED.value
+
+
+@pytest.mark.integration
+async def test_generate_without_statuses_leaves_the_order_status_alone(
+    db_session, queue, make_order
+):
+    """手动 Phase-3 路径（不传 statuses）捡到的是 IMPORTED 单 —— 状态保持不变。
+
+    这是「只在 ANALYZED 时推进」的边界：否则手动建任务会把一张还没分析的单
+    直接标成 TASK_CREATED，等于宣称「已分析」。
+    """
+    order = await make_order(status=OrderStatus.IMPORTED.value)
+
+    report = await TaskService(db_session, queue).generate(order_ids=[order.id])
+
+    assert report.created == 1
+    assert report.orders_promoted == 0
+    assert await _order_status(db_session, order.id) == OrderStatus.IMPORTED.value
+
+
+@pytest.mark.integration
+async def test_generate_ignores_orders_outside_the_given_statuses(
+    db_session, queue, make_order
+):
+    """`statuses=[ANALYZED]` 时 IMPORTED 的单**不该被建任务** ——
+
+    否则等于绕过 AI 分析、把「导入即录 ERP」接回来。
+    """
+    order = await make_order(status=OrderStatus.IMPORTED.value)
+
+    report = await TaskService(db_session, queue).generate(
+        order_ids=[order.id], statuses=[OrderStatus.ANALYZED]
+    )
+
+    assert report.scanned == 0
+    assert report.created == 0
     assert await queue.size() == 0
 
 

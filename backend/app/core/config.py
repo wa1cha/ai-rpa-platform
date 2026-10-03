@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     zombie_scan_interval_seconds: int = 60
     ai_worker_concurrency: int = 5
 
+    #: AI Worker 的轮询间隔。只在「队列空、没事干」时起作用 —— 有活时
+    #: `analyze_once` 一轮就把队列排空，不会傻等一个间隔才做下一批。
+    ai_worker_poll_interval_seconds: int = 5
+
     # ---------- 模拟 ERP ----------
     mock_erp_base_url: str = "http://127.0.0.1:8001"
     mock_erp_username: str = "erp_operator"

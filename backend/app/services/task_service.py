@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import (
     TERMINAL_TASK_STATUSES,
+    OrderStatus,
     Priority,
     ReviewResult,
     RiskLevel,
@@ -64,6 +65,8 @@ class GenerateReport:
     created: int = 0
     queued: int = 0
     waiting_review: int = 0
+    #: 顺便从 ANALYZED 推进到 TASK_CREATED 的订单数（见 `generate` 的说明）
+    orders_promoted: int = 0
     task_ids: list[int] = field(default_factory=list)
 
 
@@ -155,6 +158,7 @@ class TaskService:
         self,
         *,
         order_ids: Sequence[int] | None = None,
+        statuses: Sequence[OrderStatus] | None = None,
         force_review: bool = False,
     ) -> GenerateReport:
         """给「还没有任务的订单」建任务，并把不用审核的直接入队。
@@ -165,10 +169,19 @@ class TaskService:
         分析记录一旦存在（Phase 5 之后），这里就自动改用它给出的结论，
         一行都不用改。
 
+        `statuses` 透传给仓储做状态过滤：AI 侧传 `[ANALYZED]`，只给「已分析」
+        的单建任务；手动 Phase-3 路径不传，保持「捡所有无任务订单」的旧行为。
+
+        建完任务后，把**仍处 ANALYZED** 的订单推进到 `TASK_CREATED`（同一个
+        commit 里），补上此前全代码库缺失的那一步。只在 ANALYZED 时推进——
+        手动路径捡到的是 IMPORTED 单，状态保持不变，既有行为不受影响。
+
         `force_review=True` 把所有任务都推进 `WAITING_REVIEW`，
         用来演示 / 测试人工审核通路 —— 否则本地没有 AI，那条路径永远走不到。
         """
-        candidates = await self.tasks.list_orders_without_task(order_ids=order_ids)
+        candidates = await self.tasks.list_orders_without_task(
+            order_ids=order_ids, statuses=statuses
+        )
         report = GenerateReport(scanned=len(candidates))
         if not candidates:
             return report
@@ -198,6 +211,13 @@ class TaskService:
             if need_review:
                 report.waiting_review += 1
 
+            # 建出任务后把订单推进到 TASK_CREATED。**只在 ANALYZED 时推进**：
+            # 手动 Phase-3 路径（statuses=None）捡到的是 IMPORTED 单，保持原状，
+            # 既有「任务已存在、订单仍 IMPORTED」的行为不受影响。
+            if order.status == OrderStatus.ANALYZED.value:
+                order.status = OrderStatus.TASK_CREATED.value
+                report.orders_promoted += 1
+
         # flush 只发 INSERT、拿回自增 id，不提交。把要用的值先抄成普通
         # Python 元组，再 commit —— 本项目 `expire_on_commit=False`，
         # 这些我们自己赋过值的属性提交后其实还读得到；但 `created_at` /
@@ -219,11 +239,12 @@ class TaskService:
                 report.queued += 1
 
         logger.info(
-            "生成任务：扫描 %d，新建 %d，入队 %d，待审核 %d",
+            "生成任务：扫描 %d，新建 %d，入队 %d，待审核 %d，订单推进 TASK_CREATED %d",
             report.scanned,
             report.created,
             report.queued,
             report.waiting_review,
+            report.orders_promoted,
         )
         return report
 

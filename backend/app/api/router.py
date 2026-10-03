@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter
 
-from app.api import auth, health, import_batches, orders, rpa, tasks
+from app.api import ai_analyses, auth, health, import_batches, orders, rpa, tasks
 
 api_router = APIRouter()
 
@@ -15,10 +15,10 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(orders.router)
 api_router.include_router(import_batches.router)
+api_router.include_router(ai_analyses.router)
 api_router.include_router(tasks.router)
 api_router.include_router(rpa.router)
 
 # ---------- 待实现（按开发阶段逐步放开）----------
 # 放开时把对应模块也加进上面的 import：
-#   Phase 5 AI 分析      ai_analyses
 #   Phase 8 看板/通知    dashboard, notifications

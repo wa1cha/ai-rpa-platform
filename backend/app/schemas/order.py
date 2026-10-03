@@ -53,6 +53,28 @@ class OrderImportResult(BaseModel):
 
 
 # ============================================================
+# 重新触发 AI 分析（§6.4）
+# ============================================================
+
+
+class OrderReanalyzeRequest(BaseModel):
+    """重分析的请求体，**可整个省略**（不带 body 也能调）。
+
+    `reason` 只记日志、不落库：一次重分析在 `ai_analyses` 新增一行本身就是记录，
+    这里只是给日志/审计留一句人话，不值得为它新增表或列。
+    """
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class OrderReanalyzeResult(BaseModel):
+    order_id: int
+    status: str = Field(
+        description="重分析后订单回到 IMPORTED（待分析），由 AI Worker 出队后置 ANALYZING"
+    )
+
+
+# ============================================================
 # 列表 / 详情
 # ============================================================
 
