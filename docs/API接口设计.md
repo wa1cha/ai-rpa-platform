@@ -980,6 +980,10 @@ Content-Type: multipart/form-data
 
 ## 11. 看板 Dashboard
 
+> **已实现**（Phase 6）。两个端点均已挂载（`backend/app/api/dashboard.py`），契约与下文一致。
+> 风险计数口径为「每单最新一条分析」（复用订单列表同一套「最新」定义），
+> `by_status`/`by_priority` 会把缺失的枚举值**补 0**，键集固定。
+
 ### 11.1 汇总统计
 
 ```
@@ -1059,6 +1063,10 @@ GET /api/v1/dashboard/trends?days=7
 ---
 
 ## 12. 通知 Notifications
+
+> **已实现**（Phase 6）。端点已挂载（`backend/app/api/notifications.py`），契约与下文一致。
+> v1 只有 LOG 渠道、写下即 `SENT`，所以默认**不带 status 过滤**才看得到流水；
+> `?status=PENDING` 返回空页是符合事实的（没有真实异步渠道，就没有 PENDING 的行）。
 
 ### 12.1 通知列表
 

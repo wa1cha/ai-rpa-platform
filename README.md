@@ -23,7 +23,7 @@
 | 3 | Redis 任务队列 | ✅ 已完成 | 任务生成、优先级出队、状态机、人工审核/重试/取消 |
 | 4 | RPA Worker | ✅ 已完成 | Playwright 驱动模拟 ERP，①→⑨ 全流程跑通；含幂等预检、失败截图、心跳、僵尸回收 |
 | 5 | AI 分析 | ✅ 已完成 | `ai/` 是可安装包；导入后自动入队 → AI Worker 出队调 DeepSeek → 硬规则合并 → 落 `ai_analyses` → 订单 `ANALYZED` → 建任务 `TASK_CREATED`；含 `GET/POST /ai-analyses` 两个运营端点、`POST /orders/{id}/reanalyze` 重分析端点与 prompt 评测脚本 |
-| 6 | 前端 | ⬜ 未实现 | `frontend/` 为空壳（Vue3 骨架已预建） |
+| 6 | 前端 | ✅ 已完成 | Vue3 + Vite 管理后台（登录鉴权、看板、订单/任务/AI 分析/导入批次/通知、导入与复核操作）；**手写 CSS 无组件库**，dev 期走 Vite 代理免 CORS；同时补齐后端 `dashboard`/`notifications` 三个端点 |
 | 7 | Docker + 云服务器部署 | ⬜ 未实现 | `docker-compose.yml` / `backend/Dockerfile` 已写好但**未经云上验证**；本地开发走 brew + 脚本 |
 | 8 | 压力测试 + 完善 | ⬜ 未实现 | |
 
@@ -117,6 +117,18 @@ python scripts/seed_demo_task.py
 
 接口文档：<http://127.0.0.1:8000/docs>　健康检查：`GET /api/v1/health`
 
+### 前端管理后台
+
+```bash
+cd frontend
+npm install     # 首次
+npm run dev     # 起 Vite dev server → http://localhost:5173
+```
+
+dev server 通过 Vite 代理把 `/api` 转发到 `http://127.0.0.1:8000`，
+**后端刻意不开 CORS** —— 开发期的跨域交给代理，生产由 nginx 收口（Phase 7）。
+用 `.env` 里的管理员账号登录。生产构建 `npm run build`（`dist/` 与 `node_modules/` 已 gitignore）。
+
 ### 造一批订单来导入
 
 ```bash
@@ -159,7 +171,7 @@ database/
   seed/               种子数据
   migrations/         增量迁移（010 cancel_reason、011 ERP 单号唯一、012 客户黑名单）
 docs/               设计文档（需求规格 / 数据库设计 / API 接口设计 / 模拟ERP设计 / …）
-frontend/           前端 Vue3（Phase 6，空壳）
+frontend/           前端 Vue3 + Vite 管理后台（Phase 6；手写 CSS，dev 走代理 /api → 后端）
 mock/
   erp/                模拟 ERP —— 独立 FastAPI + 独立库 mock_erp（扮演「别人家的老系统」）
   platform/           模拟电商平台 —— 订单生成器
@@ -177,7 +189,7 @@ tests/              主平台测试（backend）+ AI 包单测与评测集（tes
 
 ## 接口清单
 
-当前**真正挂载**的模块（`backend/app/api/router.py`），统一前缀 `/api/v1`，共 23 个端点。
+当前**真正挂载**的模块（`backend/app/api/router.py`），统一前缀 `/api/v1`，共 26 个端点。
 响应统一外壳 `{code, message, data}`（`code=0` 为成功）；分页数据形如 `{items, total, page, page_size}`。
 
 | 模块 | 方法 | 路径 | 鉴权 |
@@ -205,8 +217,12 @@ tests/              主平台测试（backend）+ AI 包单测与评测集（tes
 | rpa | POST | `/rpa/tasks/{task_id}/heartbeat` | Worker |
 | rpa | POST | `/rpa/tasks/{task_id}/result` | Worker |
 | rpa | POST | `/rpa/tasks/{task_id}/screenshot` | Worker |
+| dashboard | GET | `/dashboard/summary` | 管理员 |
+| dashboard | GET | `/dashboard/trends` | 管理员 |
+| notifications | GET | `/notifications` | 管理员 |
 
-> 未挂载的路由是**空壳**、按阶段逐步放开：`dashboard`、`notifications`。
+> Phase 6 补齐的 `dashboard` / `notifications` 见《API接口设计》§11 / §12；
+> 至此《API接口设计》里的端点已全部挂载，无空壳路由。
 
 ---
 
@@ -237,7 +253,7 @@ tests/              主平台测试（backend）+ AI 包单测与评测集（tes
 ```bash
 PY=/opt/anaconda3/envs/ai-rpa/bin/python   # 或 .env 里 PYTHON_BIN 指向的解释器
 
-$PY -m pytest                    # 主平台 backend + AI 包单测 —— 216 个（见下）
+$PY -m pytest                    # 主平台 backend + AI 包单测 —— 245 个（见下）
 $PY -m pytest mock/erp           # 模拟 ERP                  —— 93 个
 $PY -m pytest rpa/tests          # RPA Worker 单元           —— 63 个（默认跳过 e2e）
 $PY -m pytest rpa/tests -m e2e   # RPA 端到端                 —— 2 个（见下）
