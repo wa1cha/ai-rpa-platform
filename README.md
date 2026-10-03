@@ -25,7 +25,7 @@
 | 5 | AI 分析 | ✅ 已完成 | `ai/` 是可安装包；导入后自动入队 → AI Worker 出队调 DeepSeek → 硬规则合并 → 落 `ai_analyses` → 订单 `ANALYZED` → 建任务 `TASK_CREATED`；含 `GET/POST /ai-analyses` 两个运营端点、`POST /orders/{id}/reanalyze` 重分析端点与 prompt 评测脚本 |
 | 6 | 前端 | ✅ 已完成 | Vue3 + Vite 管理后台（登录鉴权、看板、订单/任务/AI 分析/导入批次/通知、导入与复核操作）；**手写 CSS 无组件库**，dev 期走 Vite 代理免 CORS；同时补齐后端 `dashboard`/`notifications` 三个端点 |
 | 7 | Docker + 云服务器部署 | 🟡 本机 Docker 完成 | 8 服务 compose 一键起全套（MySQL/Redis/backend/workers/seed/mock-erp/rpa-worker/frontend），完整跑通「导入→AI→RPA→ERP」；**云服务器尚未部署** |
-| 8 | 压力测试 + 完善 | ⬜ 未实现 | |
+| 8 | 压力测试 + 完善 | ✅ 已完成 | 压测脚本 `scripts/loadtest_import.py`（自管假 LLM + 打桩 Worker，不花钱）：实测 100 单/分钟下导入 300/300、导入 p95 < 60ms；突发 300 单导入仅 **0.07 s**、AI 分析异步排空 99.3 s —— 见 [`docs/压力测试.md`](docs/压力测试.md) |
 
 **当前可以完整演示的闭环**：导入订单 → AI 分析（调 LLM + 硬规则合并） → 生成任务 → 入队 → RPA Worker 领取 → 驱动模拟 ERP 录单 → 回传结果 → 管理员接口查询。
 `scripts/seed_demo_task.py` 仍在，用来**跳过 AI** 直接造一笔 `QUEUED` 任务（本地不想花 LLM 费用时用）。
@@ -163,6 +163,7 @@ python mock/platform/generate_orders.py --count 50      # 生成 CSV 到 mock/pl
 | `POST /api/v1/orders/import` | CSV/Excel 文件 | 库里的**订单** + 分析队列里的一条待办 |
 | `scripts/seed_demo_task.py` | 凭空造一笔订单 | 一笔订单 + 一个 **QUEUED** 任务（跳过 AI，仅本地演示） |
 | `scripts/gen_tasks.py` | 库里**已有订单** | 库里的**任务** + 入队（绕过 AI 的手工路径） |
+| `scripts/loadtest_import.py` | 凭空造（复用生成器） | **导入压测**：按速率打导入 + 采样 AI 队列 + JSON 报告（自管假 LLM 与打桩 Worker，不花钱） |
 
 ---
 
@@ -277,6 +278,8 @@ $PY -m pytest rpa/tests          # RPA Worker 单元           —— 63 个（�
 $PY -m pytest rpa/tests -m e2e   # RPA 端到端                 —— 2 个（见下）
 
 ./scripts/eval_prompt.sh         # LLM prompt 评测集 —— 30 条，真调 API、花钱，默认不跑
+
+$PY scripts/loadtest_import.py --total 300 --rate 100   # 导入压测（100 单/分钟，自管假 LLM，不花钱）
 ```
 
 `tests/ai/` 的评测集打了 `eval` marker，`pytest.ini` 里 `-m "not eval"` 默认把它排除，
@@ -318,3 +321,4 @@ $PY -m pytest rpa/tests -m e2e   # RPA 端到端                 —— 2 个（
 - [`docs/API接口设计.md`](docs/API接口设计.md) —— 接口契约与错误码
 - [`docs/模拟ERP设计.md`](docs/模拟ERP设计.md) —— 模拟 ERP 的页面、选择器契约与「刻意留的坑」
 - [`docs/部署说明.md`](docs/部署说明.md) —— 本机部署与排障
+- [`docs/压力测试.md`](docs/压力测试.md) —— 压测方法与实测数字（100 单/分钟解耦验证）
