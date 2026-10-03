@@ -17,7 +17,12 @@ from app.core.enums import (
 )
 from app.models.notification import Notification
 from app.models.task import Task
-from app.repositories.notification_repository import NotificationRepository
+from app.repositories.notification_repository import (
+    NotificationFilters,
+    NotificationRepository,
+)
+from app.schemas.common import Page, PageParams
+from app.schemas.notification import NotificationListItem
 
 logger = logging.getLogger(__name__)
 
@@ -58,3 +63,23 @@ class NotificationService:
             error_message or "无错误信息",
         )
         return record
+
+    # ---------- 查询（见《API接口设计》§12）----------
+
+    async def list_notifications(
+        self, params: PageParams, *, status: str | None = None
+    ) -> Page[NotificationListItem]:
+        """只读列表 —— 与 `notify_task_failed` 的写入路径完全分开。
+
+        v1 只有 LOG 渠道、且写下即 `SENT`，所以默认**不带 status 过滤**
+        才看得到东西；`?status=PENDING` 会返回空页，这是符合事实的
+        （没有真实异步渠道，就没有 PENDING 的行）。
+        """
+        rows, total = await self.notifications.list_notifications(
+            NotificationFilters(status=status), params
+        )
+        # `paginate` 返回的是 `Row`（每行一个元组），这里查的只有一列，取 `row[0]`。
+        items = [NotificationListItem.model_validate(row[0]) for row in rows]
+        return Page(
+            items=items, total=total, page=params.page, page_size=params.page_size
+        )
