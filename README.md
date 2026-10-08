@@ -24,7 +24,7 @@
 | 4 | RPA Worker | ✅ 已完成 | Playwright 驱动模拟 ERP，①→⑨ 全流程跑通；含幂等预检、失败截图、心跳、僵尸回收 |
 | 5 | AI 分析 | ✅ 已完成 | `ai/` 是可安装包；导入后自动入队 → AI Worker 出队调 DeepSeek → 硬规则合并 → 落 `ai_analyses` → 订单 `ANALYZED` → 建任务 `TASK_CREATED`；含 `GET/POST /ai-analyses` 两个运营端点、`POST /orders/{id}/reanalyze` 重分析端点与 prompt 评测脚本 |
 | 6 | 前端 | ✅ 已完成 | Vue3 + Vite 管理后台（登录鉴权、看板、订单/任务/AI 分析/导入批次/通知、导入与复核操作）；**手写 CSS 无组件库**，dev 期走 Vite 代理免 CORS；同时补齐后端 `dashboard`/`notifications` 三个端点 |
-| 7 | Docker + 云服务器部署 | 🟡 本机 Docker 完成 | 8 服务 compose 一键起全套（MySQL/Redis/backend/workers/seed/mock-erp/rpa-worker/frontend），完整跑通「导入→AI→RPA→ERP」；**云服务器尚未部署** |
+| 7 | Docker + 云服务器部署 | ✅ 已完成 | 8 服务 compose 一键起全套（MySQL/Redis/backend/workers/seed/mock-erp/rpa-worker/frontend），完整跑通「导入→AI→RPA→ERP」；**已部署腾讯云服务器**（Ubuntu 24.04 / x86_64，全链路真跑通），公网地址与口令不写入仓库 |
 | 8 | 压力测试 + 完善 | ✅ 已完成 | 压测脚本 `scripts/loadtest_import.py`（自管假 LLM + 打桩 Worker，不花钱）：实测 100 单/分钟下导入 300/300、导入 p95 < 60ms；突发 300 单导入仅 **0.07 s**、AI 分析异步排空 99.3 s —— 见 [`docs/压力测试.md`](docs/压力测试.md) |
 
 **当前可以完整演示的闭环**：导入订单 → AI 分析（调 LLM + 硬规则合并） → 生成任务 → 入队 → RPA Worker 领取 → 驱动模拟 ERP 录单 → 回传结果 → 管理员接口查询。
