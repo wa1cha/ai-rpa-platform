@@ -14,6 +14,15 @@
 
 FROM python:3.12-slim
 
+# ---- 可选镜像源（构建参数）---- 详见 backend/Dockerfile 同段注释。
+ARG APT_MIRROR=
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
+        /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai
@@ -27,7 +36,9 @@ WORKDIR /app/mock/erp
 COPY requirements.txt ./requirements.txt
 # 与 app 镜像同理：asyncmy / bcrypt 在 PyPI 上有 manylinux wheel；若报缺编译器，
 # 在 pip install 之前补 `apt-get install -y --no-install-recommends gcc python3-dev`。
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install ${PIP_INDEX_URL:+--index-url ${PIP_INDEX_URL}} \
+                ${PIP_TRUSTED_HOST:+--trusted-host ${PIP_TRUSTED_HOST}} \
+                --no-cache-dir -r requirements.txt
 
 COPY . ./
 

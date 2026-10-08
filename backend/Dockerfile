@@ -19,6 +19,18 @@
 
 FROM python:3.12-slim
 
+# ---- 可选镜像源（构建参数）----
+# 默认留空 = 走官方源（本地 / 海外构建）。国内服务器（如腾讯云）可在根 .env 里设
+# APT_MIRROR / PIP_INDEX_URL / PIP_TRUSTED_HOST，由 docker-compose.yml 透传进来，
+# 把构建从 ~29 KiB/s 提到几十 MB/s。留空时下面的 sed / pip 参数都不生效。
+ARG APT_MIRROR=
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
+        /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi
+
 # PYTHONUNBUFFERED 是必须的：不设的话 stdout 走块缓冲，
 # `docker compose logs -f` 会看起来像「服务卡住不输出」，其实只是没刷出来。
 # PYTHONPATH 指向 backend/，让 `app.*` 能被 import（与各启动脚本的 PYTHONPATH 口径一致）。
@@ -38,11 +50,16 @@ WORKDIR /app
 
 # ① 先装 ai 包。它与 backend 是单向依赖（backend → ai），backend 一跑起来就 import 它。
 COPY ai/ ./ai/
-RUN pip install --no-cache-dir ./ai
+# 参数化 pip 源：${VAR:+...} 在变量为空时展开成空，非空时才追加参数。
+RUN pip install ${PIP_INDEX_URL:+--index-url ${PIP_INDEX_URL}} \
+                ${PIP_TRUSTED_HOST:+--trusted-host ${PIP_TRUSTED_HOST}} \
+                --no-cache-dir ./ai
 
 # ② 再装主平台依赖。放在源码之前，改代码不会让依赖层缓存失效。
 COPY backend/requirements.txt ./backend/requirements.txt
-RUN pip install --no-cache-dir -r ./backend/requirements.txt
+RUN pip install ${PIP_INDEX_URL:+--index-url ${PIP_INDEX_URL}} \
+                ${PIP_TRUSTED_HOST:+--trusted-host ${PIP_TRUSTED_HOST}} \
+                --no-cache-dir -r ./backend/requirements.txt
 
 # ③ 源码与种子脚本。脚本里的 `BACKEND_DIR = scripts/../backend` 在本布局下成立。
 #    database/seed/04_orders_sample.csv 给 seed 服务导入 7 笔样例订单用。

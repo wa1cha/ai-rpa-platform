@@ -100,6 +100,12 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      # 镜像源（留空 = 官方源）。国内服务器（如腾讯云）在 .env 里设这三项即可，
+      # 见 docs/部署说明.md。透传给 Dockerfile 的 ARG，本地/海外构建不受影响。
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     image: ai-rpa-app:local
     container_name: ai-rpa-backend
     restart: unless-stopped
@@ -154,6 +160,10 @@ services:
     build:
       context: ./mock/erp
       dockerfile: Dockerfile
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     image: ai-rpa-mock-erp:local
     container_name: ai-rpa-mock-erp
     restart: unless-stopped
@@ -178,6 +188,12 @@ services:
     build:
       context: ./rpa
       dockerfile: Dockerfile
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        # 浏览器下载源；留空则 Dockerfile 默认用 azureedge。国内需要时可在 .env 覆盖。
+        PLAYWRIGHT_DOWNLOAD_HOST: ${PLAYWRIGHT_DOWNLOAD_HOST:-}
     image: ai-rpa-worker:local
     container_name: ai-rpa-worker
     restart: unless-stopped
@@ -203,6 +219,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
     image: ai-rpa-frontend:local
     container_name: ai-rpa-frontend
     restart: unless-stopped

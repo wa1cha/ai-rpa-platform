@@ -16,10 +16,15 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
+# ---- 可选 npm 源（构建参数）----
+# 默认留空 = 走 registry.npmjs.org。国内服务器可在根 .env 设 NPM_REGISTRY
+# （如 https://registry.npmmirror.com），由 compose 透传。
+ARG NPM_REGISTRY=
+
 # 先拷 lockfile 再 npm ci：依赖不变时这层缓存有效，改源码不必重装。
 # npm ci 严格按 package-lock.json 装，构建可复现。
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci ${NPM_REGISTRY:+--registry=${NPM_REGISTRY}}
 
 COPY . ./
 RUN npm run build
